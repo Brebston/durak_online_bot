@@ -8,6 +8,7 @@ import Profile from './screens/Profile.jsx'
 import Shop from './screens/Shop.jsx'
 import Friends from './screens/Friends.jsx'
 import Admin from './screens/Admin.jsx'
+import Withdrawals from './screens/Withdrawals.jsx'
 
 export default function App() {
   const [me, setMe] = useState(null)
@@ -126,6 +127,7 @@ export default function App() {
     ['play', '🃏', 'Грати'],
     ['friends', '👥', 'Друзі', badge],
     ['shop', '🛍', 'Магазин'],
+    ['withdrawals', '⭐', 'Вивід'],
     ['profile', '👤', 'Кабінет'],
     ...(me.is_admin ? [['admin', '🛠', 'Адмін']] : []),
   ]
@@ -142,6 +144,7 @@ export default function App() {
         {tab === 'play' && <Lobby me={me} send={send} />}
         {tab === 'friends' && <Friends me={me} toast={toast} reloadMe={loadMe} incoming={dm} tick={tick} />}
         {tab === 'shop' && <Shop me={me} reload={loadMe} toast={toast} />}
+        {tab === 'withdrawals' && <Withdrawals me={me} reload={loadMe} toast={toast} />}
         {tab === 'profile' && <Profile me={me} reload={loadMe} toast={toast} />}
         {tab === 'admin' && me.is_admin && <Admin me={me} toast={toast} reloadMe={loadMe} />}
       </main>

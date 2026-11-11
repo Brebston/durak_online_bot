@@ -34,6 +34,23 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tx_account ON transactions(account);
+CREATE TABLE IF NOT EXISTS withdrawal_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    chips INTEGER NOT NULL CHECK(chips > 0),
+    stars INTEGER NOT NULL CHECK(stars > 0),
+    eur_estimate REAL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','completed','rejected')),
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    decided_by INTEGER,
+    completed_at INTEGER,
+    completed_by INTEGER,
+    decision_note TEXT,
+    payout_reference TEXT
+);
+CREATE INDEX IF NOT EXISTS withdrawal_status ON withdrawal_requests(status, id DESC);
+CREATE INDEX IF NOT EXISTS withdrawal_user ON withdrawal_requests(user_id, id DESC);
 CREATE TRIGGER IF NOT EXISTS tx_no_update BEFORE UPDATE ON transactions
 BEGIN SELECT RAISE(ABORT, 'transactions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS tx_no_delete BEFORE DELETE ON transactions

@@ -1,4 +1,4 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
-aiogram>=3.13
+aiogram>=3.31.0
 cryptography>=42

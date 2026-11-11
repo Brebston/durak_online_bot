@@ -31,10 +31,11 @@ class Social:
         return u
 
     def public_user(self, u: dict, online: set[int]) -> dict:
+        from .avatars import avatar_url
         from .levels import level_of
 
         return {"id": u["id"], "name": u["name"], "username": u["username"], "online": u["id"] in online,
-                "lvl": level_of(int(u.get("xp") or 0))}
+                "lvl": level_of(int(u.get("xp") or 0)), "avatar": avatar_url(u)}
 
     def search(self, uid: int, q: str, online: set[int]) -> list[dict]:
         q = (q or "").strip().lstrip("@")

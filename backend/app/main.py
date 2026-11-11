@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AuthError, validate_init_data
+from .avatars import AvatarError, Avatars, avatar_url, safe_tg_photo
 from .bot_i18n import bt, pick_lang
 from .config import settings
 from .crypto import DealCipher
@@ -58,6 +59,7 @@ class State:
     rooms: RoomManager
     shop: Shop
     social: Social
+    avatars: Avatars
     tg = None
     conns: dict[int, set[WebSocket]] = defaultdict(set)
     http_limit = RateLimiter(5, 30)
@@ -85,6 +87,7 @@ def init_state(db_path: str | None = None) -> None:
     S.ledger = Ledger(S.db)
     S.shop = Shop(S.db, S.ledger)
     S.social = Social(S.db)
+    S.avatars = Avatars(S.db)
     S.rooms = RoomManager(S.db, S.ledger, DealCipher(settings.deal_key), send_to_user, shop=S.shop, social=S.social)
     S.rooms.online = is_online
     recover_after_restart()
@@ -196,7 +199,7 @@ def authenticate(raw: str, ip: str = "") -> dict:
                 S.db.ex("INSERT INTO auth_log(ts,user_id,ok,note) VALUES(?,?,0,?)", (int(time.time()), None, f"{e} {ip}"))
                 raise
     name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x) or str(user["id"])
-    u = S.db.upsert_user(int(user["id"]), name, user.get("username"))
+    u = S.db.upsert_user(int(user["id"]), name[:64], user.get("username"), safe_tg_photo(user.get("photo_url")))
     return {"id": u["id"], "name": u["name"], "username": u["username"], "banned": u["banned"]}
 
 
@@ -257,6 +260,7 @@ async def me(user: dict = Depends(current_user)):
         "progress": progress(int(u["xp"] or 0)),
         "lang": u["lang"],
         "cosmetics": S.shop.equipped(user["id"]),
+        "avatar": {"url": avatar_url(u), "kind": u["avatar"] or "tg", "has_tg": bool(u["tg_photo"])},
         "emojis": S.shop.emojis(user["id"]),
         "friend_requests": S.db.one("SELECT COUNT(*) n FROM friend_requests WHERE to_id=?", (user["id"],))["n"],
         "unread": S.db.one("SELECT COUNT(*) n FROM messages WHERE to_id=? AND read=0", (user["id"],))["n"],
@@ -296,6 +300,48 @@ async def save_lang(body: LangIn, user: dict = Depends(current_user)):
     if body.lang not in ("uk", "en", "pl", "ru"):
         raise HTTPException(400, "Невідома мова")
     S.db.ex("UPDATE users SET lang=? WHERE id=?", (body.lang, user["id"]))
+    return {"ok": True}
+
+
+# ---------- аватарки ----------
+class AvatarIn(BaseModel):
+    kind: str                 # custom | tg | none
+    data: str | None = None   # data:image/...;base64,... (для custom)
+
+
+@app.post("/api/avatar")
+async def set_avatar(body: AvatarIn, user: dict = Depends(current_user)):
+    try:
+        if body.kind == "custom":
+            S.avatars.set_custom(user["id"], body.data or "")
+        else:
+            S.avatars.set_kind(user["id"], body.kind)
+    except AvatarError as e:
+        raise HTTPException(400, str(e))
+    return {"url": avatar_url(S.db.user(user["id"]))}
+
+
+@app.get("/api/avatar/{uid}")
+async def get_avatar(uid: int):
+    from fastapi.responses import Response
+
+    data = S.avatars.get(uid)
+    if not data:
+        raise HTTPException(404, "Не знайдено")
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+class AdminAvatarIn(BaseModel):
+    user_id: int
+    reason: str
+
+
+@app.post("/api/admin/avatar/remove")
+async def admin_remove_avatar(body: AdminAvatarIn, admin: dict = Depends(admin_user)):
+    if len(body.reason.strip()) < 3:
+        raise HTTPException(400, "Вкажіть причину")
+    S.avatars.remove(body.user_id)
+    S.db.audit(admin["id"], "avatar_removed", acc(body.user_id), {"reason": body.reason})
     return {"ok": True}
 
 
@@ -721,6 +767,7 @@ async def admin_users(q: str = "", admin: dict = Depends(admin_user)):
     for r in rows:
         r["balance"] = S.ledger.balance(acc(r["id"]))
         r["available"] = S.ledger.available(acc(r["id"]))
+        r["avatar_url"] = avatar_url(r)
     return {"users": rows}
 
 

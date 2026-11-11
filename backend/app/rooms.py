@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .avatars import avatar_url
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
@@ -52,6 +53,7 @@ class Seat:
     last_emote: float = 0.0
     seen: set = field(default_factory=set)            # карти, які бот уже «перевірив» на мухлювання
     lvl: int = 1                                       # рівень гравця (для відображення)
+    avatar: str | None = None
 
     @property
     def account(self) -> str:
@@ -60,7 +62,8 @@ class Seat:
     def public(self, me: int | None, hide_bot: bool = False) -> dict:
         bot = self.bot and not hide_bot
         return {"pid": self.pid, "name": self.name, "bot": bot, "level": self.level if bot else None,
-                "you": me is not None and self.user_id == me, "back": self.back, "lvl": self.lvl}
+                "you": me is not None and self.user_id == me, "back": self.back, "lvl": self.lvl,
+                "avatar": self.avatar}
 
 
 @dataclass
@@ -368,6 +371,7 @@ class RoomManager:
                 seat.back = self.shop.equipped(uid)["back"]
             u = self.db.user(uid)
             seat.lvl = level_of(int(u["xp"] or 0)) if u else 1
+            seat.avatar = avatar_url(u)
             if room.mode == "stake":
                 try:
                     seat.hold_id = self.ledger.hold(acc(uid), room.stake, room.id)

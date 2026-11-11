@@ -1,6 +1,15 @@
 import React, { useMemo } from 'react'
 import { t } from './i18n.js'
 
+/** Аватарка: фото або кольоровий кружок з ініціалами. */
+export function Avatar({ url, name, size = 34 }) {
+  const box = { width: size, height: size, minWidth: size }
+  if (url) return <img className="avatar" src={url} alt="" style={box} loading="lazy" referrerPolicy="no-referrer" />
+  const letters = (name || '?').replace(/[^\p{L}\p{N}\s]/gu, '').trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?'
+  const hue = [...(name || '')].reduce((a, c) => a + c.codePointAt(0), 0) % 360
+  return <div className="avatar" style={{ ...box, background: `hsl(${hue} 42% 38%)`, fontSize: size * 0.4 }}>{letters}</div>
+}
+
 /** Іконка ігрової фішки (валюта гри). */
 export function Chip({ size }) {
   return <i className="coin" style={size ? { width: size, height: size } : undefined} aria-label={t('фішок')} title={t('фішки')} />;

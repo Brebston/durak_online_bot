@@ -38,7 +38,7 @@ export default function App() {
 
   useEffect(() => {
     loadMe()
-    const t = setTimeout(() => setShowIntro(false), 2000)
+    const introTimer = setTimeout(() => setShowIntro(false), 2000)
     const joinId = tg?.initDataUnsafe?.start_param?.replace(/^room_/, '') ||
       new URLSearchParams(location.search).get('room')
     let joined = false
@@ -66,18 +66,18 @@ export default function App() {
         setInvite(m)
       } else if (m.type === 'dm') {
         setDm(m.msg)
-        setTick((t) => t + 1)
+        setTick((n) => n + 1)
         toast(`💬 ${m.msg.from_name}: ${m.msg.text.slice(0, 60)}`)
         loadMe()
       } else if (m.type === 'friends') {
-        setTick((t) => t + 1)
+        setTick((n) => n + 1)
         toast(m.event === 'accepted' || m.event === 'friends' ? t('{0} тепер ваш друг', m.from) : t('{0} хоче додати вас у друзі', m.from))
         loadMe()
       } else if (m.type === 'error') {
         toast(m.key ? t(m.key, ...(m.args || []).map((a) => t(a))) : t(m.message))
       }
     }, setOnline)
-    return () => { clearTimeout(t); sock.current.close() }
+    return () => { clearTimeout(introTimer); sock.current.close() }
   }, [loadMe, toast])
 
   const send = (msg) => {

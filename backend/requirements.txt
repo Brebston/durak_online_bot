@@ -1,4 +1,4 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-aiogram>=3.13
-cryptography>=42
+fastapi>=0.162.2
+uvicorn[standard]>=0.54.0
+aiogram>=3.31.0
+cryptography>=50.0.2

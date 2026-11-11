@@ -62,6 +62,35 @@ def _maybe_cheat(view: dict, actions: list[dict], honest: dict, level: str, rng:
     return honest
 
 
+def think_time(view: dict, action: dict, rng: random.Random) -> float:
+    """Скільки секунд бот «думає» над ходом, щоб грати в людському темпі."""
+    acts = [a for a in view["actions"] if a["type"] != "catch" and not a.get("cheat")]
+    kind = action["type"]
+    unbeaten = sum(1 for _, d in view["table"] if d is None)
+    choices = len({a.get("card") for a in acts if a.get("card")})
+    if len(acts) <= 1:
+        base = rng.uniform(0.8, 1.5)                       # вибору немає
+    elif kind == "take":
+        base = rng.uniform(2.2, 4.5)                       # довго вирішує, чи брати
+    elif kind == "pass":
+        base = rng.uniform(1.0, 2.4)                       # дивиться, чи є що підкинути
+    elif not view["table"]:
+        base = rng.uniform(1.5, 3.0) + 0.15 * min(choices, 8)   # обирає, з чого зайти
+    elif kind == "defend":
+        base = rng.uniform(1.3, 2.6) + 0.4 * max(0, unbeaten - 1)
+    elif kind == "transfer":
+        base = rng.uniform(1.6, 3.2)
+    else:
+        base = rng.uniform(1.2, 2.8)                       # підкидає
+    if view["deck_count"] == 0:
+        base *= 1.25                                       # у кінці гри уважніше
+    if rng.random() < 0.12:
+        base += rng.uniform(1.5, 4.0)                      # інколи задумується
+    if action.get("cheat"):
+        base += rng.uniform(0.5, 1.5)                      # мухлювати — теж треба наважитися
+    return min(base, view["rules"]["turn_seconds"] * 0.55)
+
+
 def suspicious_cards(view: dict) -> list[str]:
     """Карти на столі, які видно що покладені не за правилами (бачить кожен уважний гравець)."""
     trump = view["trump"]

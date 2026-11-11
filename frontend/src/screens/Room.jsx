@@ -6,7 +6,6 @@ import { inside, nearestPairs, resolveDrop } from '../dnd.js'
 import { Avatar, Victory } from '../Fx.jsx'
 import { t } from '../i18n.js'
 
-const LEVELS = [['easy', t('Легкий')], ['medium', t('Середній')], ['hard', t('Сильний')]]
 const RANKS = { 11: t('В'), 12: t('Д'), 13: t('К'), 14: t('Т') }
 
 export function Card({ c, small, className = '', ...rest }) {
@@ -50,7 +49,6 @@ export default function Room({ data, me, send, onExit, onAgain, toast }) {
 
 // ======================= Очікування =======================
 function Waiting({ room, send, onExit, me, serverNow }) {
-  const [level, setLevel] = useState('medium')
   const [friends, setFriends] = useState(null)
   const [invited, setInvited] = useState({})
   const free = room.size - room.seats.length
@@ -127,11 +125,8 @@ function Waiting({ room, send, onExit, me, serverNow }) {
         {!quick && room.owner && (
           <section className="card-box">
             <h3>{t('Додати ботів на вільні місця')}</h3>
-            <div className="seg">
-              {LEVELS.map(([v, l]) => <button key={v} className={level === v ? 'on' : ''} onClick={() => setLevel(v)}>{l}</button>)}
-            </div>
             <div className="actions-col">
-              <button className="btn primary" onClick={() => send({ type: 'add_bots', room: room.id, level })}>{t('Заповнити ботами (')}{free})
+              <button className="btn primary" onClick={() => send({ type: 'add_bots', room: room.id, level: 'hard' })}>{t('Заповнити ботами (')}{free})
               </button>
             </div>
           </section>

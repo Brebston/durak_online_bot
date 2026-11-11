@@ -15,7 +15,7 @@ from .avatars import avatar_url
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
-from .game.bot_ai import LEVELS, catch_decision, choose_action
+from .game.bot_ai import LEVELS, catch_decision, choose_action, think_time
 from .game.engine import Game, IllegalMove, Rules
 from .ledger import BANK, Ledger, LedgerError, acc
 from .levels import level_of, match_xp
@@ -128,6 +128,7 @@ class RoomManager:
         self.rooms: dict[str, Room] = {}
         self.user_room: dict[int, str] = {}
         self.rng = random.SystemRandom()
+        self.speed = 1.0  # множник «часу на роздуми» ботів (у тестах — 0)
 
     # ---------- налаштування режимів (змінює адмін) ----------
     def modes(self) -> dict:
@@ -390,7 +391,7 @@ class RoomManager:
             raise RoomError("Кімнату не знайдено")
         if not room.private:
             raise RoomError("У швидкій грі суперники підбираються автоматично")
-        await self._fill_bots(room, level)
+        await self._fill_bots(room, "hard")  # у власних кімнатах — лише найсильніші боти
 
     async def _fill_bots(self, room: Room, level: str) -> None:
         if not self.modes().get("bots"):
@@ -563,7 +564,7 @@ class RoomManager:
                                 catcher = (s, c)
                                 break
                     if catcher:
-                        await asyncio.sleep(self.rng.uniform(0.9, 2.4))
+                        await asyncio.sleep(self.rng.uniform(1.2, 3.5) * self.speed)
                         s, c = catcher
                         async with room.lock:
                             if room.status != "playing" or c not in g.legal_actions(s.pid):
@@ -582,14 +583,16 @@ class RoomManager:
                 if not bots:
                     return
                 seat = bots[0]
-                await asyncio.sleep(self.rng.uniform(0.7, 1.6))
-                if room.status != "playing" or g.version != version:
-                    continue
                 view = g.view(seat.pid)  # бот бачить лише те, що бачив би гравець
                 rng = random.Random(self.rng.random())
                 act = await loop.run_in_executor(None, choose_action, view, seat.level, rng)
                 if not act:
+                    await asyncio.sleep(0.5)
                     continue
+                # «думає», як людина: прості ходи швидко, складні — довше, інколи вагається
+                await asyncio.sleep(think_time(view, act, rng) * self.speed)
+                if room.status != "playing" or g.version != version:
+                    continue  # поки думав, на столі щось змінилося — думаємо заново
                 async with room.lock:
                     if g.version != version or room.status != "playing":
                         continue

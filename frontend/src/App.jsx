@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, GameSocket, haptic, tg } from './api.js'
-import { Intro } from './Fx.jsx'
+import { Chip, Intro } from './Fx.jsx'
+import { sfx } from './sounds.js'
 import Lobby from './screens/Lobby.jsx'
 import Room from './screens/Room.jsx'
 import Profile from './screens/Profile.jsx'
@@ -21,7 +22,7 @@ export default function App() {
   const sock = useRef(null)
   const lastFind = useRef(null)
 
-  const loadMe = useCallback(() => api('/api/me').then(setMe).catch((e) => setErr(e.message)), [])
+  const loadMe = useCallback(() => api('/api/me').then((m) => { sfx.setEnabled(m.settings.sound); setMe(m) }).catch((e) => setErr(e.message)), [])
 
   const toast = useCallback((m) => {
     setErr(m)
@@ -42,6 +43,7 @@ export default function App() {
         setRoom(m)
         if (m.room.status === 'finished') loadMe()
       } else if (m.type === 'chat') {
+        if (m.msg.emoji) sfx.play('emoji')
         setRoom((r) => (r && r.room.id === m.room
           ? { ...r, room: { ...r.room, chat: [...(r.room.chat || []), m.msg].slice(-60) } } : r))
       } else if (m.type === 'left') {
@@ -133,7 +135,7 @@ export default function App() {
       <header className="topbar">
         <div className="logo">♠ Дурак</div>
         <div className="balance" onClick={() => setTab('shop')}>
-          {me.balance.chips} <span className="chip">●</span>
+          {me.balance.chips} <Chip />
         </div>
       </header>
       <main className="content">

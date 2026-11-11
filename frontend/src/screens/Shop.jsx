@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api, tg } from '../api.js'
-import { Intro, Victory } from '../Fx.jsx'
+import { Chip, Intro, Victory } from '../Fx.jsx'
+import { sfx } from '../sounds.js'
 
 const CATS = [['chips', '⭐ Фішки'], ['back', 'Сорочки'], ['table', 'Столи'], ['emoji', 'Смайлики'], ['intro', 'Заставки'], ['victory', 'Перемога']]
 
@@ -36,6 +37,7 @@ export default function Shop({ me, reload, toast }) {
     try {
       const r = await api('/api/shop/buy', { item_id: item.id })
       setShop((s) => ({ ...s, ...r }))
+      sfx.play('coin')
       toast(`«${item.name}» ваше!`)
       reload()
     } catch (e) { toast(e.message) } finally { setBusy(false) }
@@ -61,14 +63,14 @@ export default function Shop({ me, reload, toast }) {
       {cat === 'chips' && (
         <>
           <section className="card-box">
-            <h3>Баланс: {me.balance.chips} фішок</h3>
+            <h3>Баланс: {me.balance.chips} <Chip /></h3>
             <p className="hint">1 ⭐ = {me.shop.rate} фішок. Фішки — ігрова валюта лише для цієї гри,
               не виводяться і не обмінюються на гроші. На фішки можна грати й купувати оформлення.</p>
           </section>
           <div className="packs">
             {me.shop.packs.map((s) => (
               <button key={s} className="pack" disabled={busy || !me.shop.enabled} onClick={() => buyStars(s)}>
-                <b>{s * me.shop.rate}</b><span>фішок</span><em>{s} ⭐</em>
+                <b>{s * me.shop.rate} <Chip size={20} /></b><span>фішок</span><em>{s} ⭐</em>
               </button>
             ))}
           </div>
@@ -98,7 +100,7 @@ export default function Shop({ me, reload, toast }) {
                     ? <span className="hint">✓ Ваше</span>
                     : <button className="btn small" onClick={() => equip(item)}>Встановити</button>)
                     : <button className="btn small primary" disabled={busy || me.available.chips < item.price} onClick={() => buy(item)}>
-                      {item.price} <span className="chip">●</span>
+                      {item.price} <Chip />
                     </button>}
               </div>
             )

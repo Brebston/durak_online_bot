@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api, label } from '../api.js'
+import { Chip } from '../Fx.jsx'
 
 const SECTIONS = [['overview', 'Огляд'], ['balance', 'Баланси'], ['matches', 'Матчі'], ['tickets', 'Звернення'], ['modes', 'Режими'], ['audit', 'Аудит']]
 const ts = (t) => new Date(t * 1000).toLocaleString('uk-UA')
@@ -58,9 +59,17 @@ function Overview({ toast }) {
   }
   return (
     <>
+      <section className="card-box bank-card">
+        <h3>🏦 Банк гри</h3>
+        <div className="bank-sum">{d.bank.balance} <Chip /></div>
+        <div className="terms">
+          <div><span>Вільно для ставок ботів</span><b>{d.bank.available} <Chip /></b></div>
+          <div><span>Зараз у резерві (йдуть матчі)</span><b>{d.bank.balance - d.bank.available} <Chip /></b></div>
+        </div>
+        <p className="hint">Поповнити: «Баланси» → отримувач «Банк гри», або в боті <code>/bank 10000 причина</code>.</p>
+      </section>
       <section className="stats">
-        <div><b>{d.bank.balance}</b><span>банк гри</span></div>
-        <div><b>{d.bank.available}</b><span>вільно в банку</span></div>
+        <div><b>{d.fee}</b><span>комісія</span></div>
         <div><b>{d.users}</b><span>гравців</span></div>
         <div><b>{d.open_tickets}</b><span>звернень</span></div>
       </section>
@@ -98,6 +107,9 @@ function Balances({ toast, reloadMe }) {
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
   const [tx, setTx] = useState([])
+  const [bank, setBank] = useState(null)
+  const loadBank = useCallback(() => api('/api/admin/overview').then((d) => setBank(d.bank)).catch(() => {}), [])
+  useEffect(() => { loadBank() }, [loadBank])
   const search = useCallback(() => api(`/api/admin/users?q=${encodeURIComponent(q)}`).then((r) => setUsers(r.users)).catch((e) => toast(e.message)), [q, toast])
   useEffect(() => { search() }, []) // eslint-disable-line
   useEffect(() => {
@@ -109,7 +121,7 @@ function Balances({ toast, reloadMe }) {
       const r = await api('/api/admin/adjust', { user_id: target ? target.id : null, amount: parseInt(amount, 10), reason })
       toast(`Готово. Новий баланс: ${r.balance}`)
       setAmount(''); setReason('')
-      search(); reloadMe()
+      search(); reloadMe(); loadBank()
       setTarget(target ? { ...target } : null)
     } catch (e) { toast(e.message) }
   }
@@ -124,6 +136,7 @@ function Balances({ toast, reloadMe }) {
       <section className="card-box">
         <h3>Нарахування / списання</h3>
         <p className="hint">Отримувач: <b>{target ? `${target.name} (${target.id})` : 'Банк гри (ставки ботів)'}</b>
+          {!target && bank && <> · баланс <b>{bank.balance}</b> <Chip /> (вільно {bank.available})</>}
           {target && <button className="link" onClick={() => setTarget(null)}> → банк</button>}</p>
         <input type="number" placeholder="Сума (мінус = списання)" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <input placeholder="Причина (обов'язково)" value={reason} onChange={(e) => setReason(e.target.value)} />

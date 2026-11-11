@@ -232,3 +232,16 @@ def test_custom_room_chat_invite(client):
         assert all(not s["bot"] for s in m["room"]["seats"])  # у безкоштовній грі позначки бота немає
         a.send_text(json.dumps({"type": "leave"}))
         b.send_text(json.dumps({"type": "leave"}))
+
+
+def test_restart_releases_holds(tmp_path):
+    from app.ledger import Ledger
+    db_file = tmp_path / "r.db"
+    db = DB(db_file)
+    L = Ledger(db)
+    L.post("u:9", 100, "deposit")
+    L.hold("u:9", 60, "room1")
+    db.ex("INSERT INTO matches(id,created_at,mode,stake,rules,players,status) VALUES('m1',0,'stake',60,'{}','[]','playing')")
+    main.init_state(str(db_file))
+    assert main.S.ledger.available("u:9") == 100
+    assert main.S.db.one("SELECT status FROM matches WHERE id='m1'")["status"] == "cancelled"

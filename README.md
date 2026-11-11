@@ -81,6 +81,19 @@ docker compose up -d --build
 1. Напишіть боту `/start`, і з'явиться кнопка «Грати».
 2. Поповніть банк гри, щоб боти могли грати на фішки: `/bank 10000 Стартовий банк`.
 
+### Railway (хмара, автодеплой із GitHub)
+
+У репозиторії вже є `railway.json` (збірка з Dockerfile, healthcheck `/api/health`). Сервер слухає порт зі змінної `PORT`.
+
+1. **New Project → Deploy from GitHub repo** → оберіть репозиторій.
+2. **Volume** з mount path `/data` — там зберігаються база й ключ роздач.
+3. **Variables:** `BOT_TOKEN`, `ADMIN_IDS`, `WEBAPP_URL`, `DATA_DIR=/data` і решта змінних із таблиці нижче.
+4. **Settings → Networking → Generate Domain** → вставте видану адресу в `WEBAPP_URL`.
+5. **Settings → Source:** гілка `main`, увімкніть автодеплой і **Wait for CI** — тоді деплой відбувається лише після зелених тестів GitHub Actions.
+
+> Кімнати зберігаються в памʼяті, тож під час деплою матчі, що йшли, скасовуються, а ставки автоматично повертаються.
+> Тримайте **одну** репліку: SQLite і бот у режимі polling не масштабуються горизонтально.
+
 ### Cloudflare Tunnel (без власного сервера)
 
 ```bash

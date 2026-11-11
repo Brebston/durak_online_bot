@@ -13,4 +13,5 @@ ignore = ["B008", "B904", "E501", "UP017"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q"

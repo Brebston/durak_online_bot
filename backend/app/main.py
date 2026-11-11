@@ -85,6 +85,22 @@ def init_state(db_path: str | None = None) -> None:
     S.social = Social(S.db)
     S.rooms = RoomManager(S.db, S.ledger, DealCipher(settings.deal_key), send_to_user, shop=S.shop, social=S.social)
     S.rooms.online = is_online
+    recover_after_restart()
+
+
+def recover_after_restart() -> None:
+    """Кімнати живуть у памʼяті, тож після перезапуску (напр. автодеплою) матчі, що йшли,
+    скасовуються, а всі резерви ставок повертаються гравцям і банку."""
+    stale = S.db.q("SELECT id FROM matches WHERE status='playing'")
+    reason = json.dumps({"cancelled": True, "reason": "Перезапуск сервера — ставки повернуто"}, ensure_ascii=False)
+    for m in stale:
+        S.db.ex("UPDATE matches SET status='cancelled', finished_at=?, result=? WHERE id=?",
+                (int(time.time()), reason, m["id"]))
+    held = S.db.one("SELECT COUNT(*) n FROM holds WHERE status='active'")["n"]
+    S.db.ex("UPDATE holds SET status='released' WHERE status='active'")
+    if stale or held:
+        S.db.audit(None, "restart_recovery", None, {"matches": len(stale), "holds": held})
+        log.warning("Після перезапуску скасовано матчів: %s, повернуто резервів: %s", len(stale), held)
 
 
 def is_online(uid: int) -> bool:

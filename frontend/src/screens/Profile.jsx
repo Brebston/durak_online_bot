@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { lang, LANGS, setLang, t } from '../i18n.js'
+import { Avatar } from '../Fx.jsx'
 
 const OUT = { win: [t('Перемога'), 'plus'], loss: [t('Дурень'), 'minus'], draw: [t('Нічия'), ''], cancelled: [t('Скасовано'), ''], playing: [t('Триває'), ''] }
 const KIND = {
@@ -21,6 +22,27 @@ export default function Profile({ me, reload, toast }) {
     await api('/api/settings', { ...me.settings, ...patch }).catch((e) => toast(e.message))
     reload()
   }
+  const setAvatar = async (kind, data) => {
+    try {
+      await api('/api/avatar', { kind, data })
+      reload()
+    } catch (e) { toast(e.message) }
+  }
+  // зменшуємо фото на пристрої (квадрат 256×256), сервер ще раз перекодує
+  const uploadAvatar = (file) => {
+    if (!file) return
+    const img = new Image()
+    img.onload = () => {
+      const side = Math.min(img.width, img.height)
+      const c = document.createElement('canvas')
+      c.width = c.height = 256
+      c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256)
+      URL.revokeObjectURL(img.src)
+      setAvatar('custom', c.toDataURL('image/jpeg', 0.85))
+    }
+    img.onerror = () => toast(t('Не вдалося прочитати зображення'))
+    img.src = URL.createObjectURL(file)
+  }
   const sendTicket = async () => {
     try {
       const r = await api('/api/support', { text: ticket })
@@ -32,7 +54,19 @@ export default function Profile({ me, reload, toast }) {
   return (
     <div className="profile">
       <section className="card-box">
-        <h3>{me.name}</h3>
+        <div className="profile-head">
+          <Avatar url={me.avatar?.url} name={me.name} size={72} />
+          <div>
+            <h3>{me.name}</h3>
+            <div className="avatar-actions">
+              <label className="btn small">{t('📷 Завантажити фото')}
+                <input type="file" accept="image/*" hidden onChange={(e) => uploadAvatar(e.target.files?.[0])} />
+              </label>
+              {me.avatar?.has_tg && me.avatar.kind !== 'tg' && <button className="btn small" onClick={() => setAvatar('tg')}>{t('Фото з Telegram')}</button>}
+              {me.avatar?.url && <button className="link" onClick={() => setAvatar('none')}>{t('Прибрати')}</button>}
+            </div>
+          </div>
+        </div>
         <div className="level-box">
           <div className="level-num">{me.progress.level}</div>
           <div style={{ flex: 1 }}>
@@ -81,13 +115,13 @@ export default function Profile({ me, reload, toast }) {
         {hist && view === 'tx' && (
           <ul className="list">
             {hist.transactions.length === 0 && <li className="hint">{t('Ще немає транзакцій')}</li>}
-            {hist.transactions.map((t) => (
-              <li key={t.id}>
+            {hist.transactions.map((tx) => (
+              <li key={tx.id}>
                 <div>
-                  <b>{KIND[t.kind] || t.kind}</b>
-                  <small>{new Date(t.created_at * 1000).toLocaleString('uk-UA')}{t.reason ? ` · ${t.reason}` : ''}</small>
+                  <b>{KIND[tx.kind] || tx.kind}</b>
+                  <small>{new Date(tx.created_at * 1000).toLocaleString('uk-UA')}{tx.reason ? ` · ${tx.reason}` : ''}</small>
                 </div>
-                <b className={t.amount > 0 ? 'plus' : 'minus'}>{t.amount > 0 ? '+' : ''}{t.amount}</b>
+                <b className={tx.amount > 0 ? 'plus' : 'minus'}>{tx.amount > 0 ? '+' : ''}{tx.amount}</b>
               </li>
             ))}
           </ul>

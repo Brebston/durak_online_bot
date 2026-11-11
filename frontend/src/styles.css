@@ -239,7 +239,7 @@ details p { color: #d6e6dd; font-size: 14px; }
 
 /* ================= v4: шулер, рівні ================= */
 .pcard.cheaty { box-shadow: 0 0 0 2px rgba(229,72,77,.55), 0 2px 5px rgba(0,0,0,.35); }
-.catch-banner { position: fixed; left: 50%; top: 38%; transform: translateX(-50%); z-index: 35; background: #2a2430; border: 2px solid var(--muted);
+.catch-banner { pointer-events: none; position: fixed; left: 50%; top: 38%; transform: translateX(-50%); z-index: 35; background: #2a2430; border: 2px solid var(--muted);
   padding: 10px 16px; border-radius: 14px; font-weight: 800; box-shadow: 0 10px 30px rgba(0,0,0,.6); animation: bubble 2.2s ease forwards; white-space: nowrap; }
 .catch-banner.ok { border-color: var(--red); background: #3a1418; }
 .cheat-hint { position: fixed; left: 8px; bottom: calc(var(--hand-h, 0px) + 4px); font-size: 11px; color: var(--muted); z-index: 4; pointer-events: none; display: none; }
@@ -257,3 +257,16 @@ details p { color: #d6e6dd; font-size: 14px; }
 .cb-back_gold { background: repeating-conic-gradient(from 0deg, #c8901a 0 15deg, #f2c14e 15deg 30deg); border-color: #fff6c2 !important; box-shadow: 0 0 6px #f2c14e; }
 .cheat-toggle { margin-top: 10px; font-weight: 600; }
 .hint.warn { color: #ffcf7a; margin-top: 8px; }
+
+/* ================= аватарки ================= */
+.avatar { border-radius: 50%; object-fit: cover; display: inline-grid; place-items: center; color: #fff; font-weight: 800;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.15); flex-shrink: 0; vertical-align: middle; }
+.opp-name { display: flex; align-items: center; justify-content: center; gap: 4px; }
+.opp-name .avatar { margin-right: 2px; }
+.seats li .avatar { margin-right: 4px; }
+.list li .avatar { margin-right: 8px; }
+.list li .grow { flex: 1; min-width: 0; }
+.profile-head { display: flex; gap: 14px; align-items: center; }
+.profile-head h3 { margin: 0 0 6px; }
+.avatar-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.avatar-actions label.btn { cursor: pointer; }

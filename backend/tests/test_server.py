@@ -284,3 +284,38 @@ def test_levels_awarded(client):
     me = client.get("/api/me", headers={"Authorization": "dev 611"}).json()
     assert me["progress"]["xp"] >= 10
     assert me["progress"]["level"] >= 1
+
+
+def test_avatars(client):
+    import base64
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), (200, 50, 50)).save(buf, "PNG")
+    data = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    h = {"Authorization": "dev 701:Ava"}
+    client.get("/api/me", headers=h)
+    r = client.post("/api/avatar", json={"kind": "custom", "data": data}, headers=h).json()
+    assert r["url"].startswith("/api/avatar/701")
+    img = client.get(r["url"])
+    assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(img.content)).size == (160, 160)
+    bad = client.post("/api/avatar", json={"kind": "custom", "data": "data:image/png;base64,AAAA"}, headers=h)
+    assert bad.status_code == 400
+    assert client.post("/api/avatar", json={"kind": "evil"}, headers=h).status_code == 400
+    me = client.get("/api/me", headers=h).json()
+    assert me["avatar"]["kind"] == "custom"
+    client.post("/api/admin/avatar/remove", json={"user_id": 701, "reason": "тест"}, headers={"Authorization": "dev 1"})
+    assert client.get("/api/me", headers=h).json()["avatar"]["url"] is None
+    assert client.get("/api/avatar/701").status_code == 404
+
+
+def test_tg_photo_only_from_telegram():
+    from app.avatars import safe_tg_photo
+
+    assert safe_tg_photo("https://t.me/i/userpic/320/abc.jpg")
+    assert safe_tg_photo("https://evil.com/x.jpg") is None
+    assert safe_tg_photo("javascript:alert(1)") is None
+    assert safe_tg_photo("https://t.me.evil.com/x.jpg") is None

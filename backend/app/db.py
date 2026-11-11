@@ -142,6 +142,11 @@ CREATE TABLE IF NOT EXISTS inventory (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, item_id)
 );
+CREATE TABLE IF NOT EXISTS avatars (
+    user_id INTEGER PRIMARY KEY,
+    data BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -169,6 +174,9 @@ class DB:
             ("discoverable", "INTEGER NOT NULL DEFAULT 1"),
             ("xp", "INTEGER NOT NULL DEFAULT 0"),
             ("lang", "TEXT"),
+            ("avatar", "TEXT"),
+            ("avatar_ver", "INTEGER NOT NULL DEFAULT 0"),
+            ("tg_photo", "TEXT"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
@@ -199,12 +207,13 @@ class DB:
             return cur.lastrowid
 
     # ---------- користувачі ----------
-    def upsert_user(self, uid: int, name: str, username: str | None) -> dict:
+    def upsert_user(self, uid: int, name: str, username: str | None, tg_photo: str | None = None) -> dict:
         now = int(time.time())
         self.ex(
-            "INSERT INTO users(id,name,username,created_at,last_seen) VALUES(?,?,?,?,?) "
-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, username=excluded.username, last_seen=excluded.last_seen",
-            (uid, name, username, now, now),
+            "INSERT INTO users(id,name,username,created_at,last_seen,tg_photo) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, username=excluded.username, last_seen=excluded.last_seen, "
+            "tg_photo=COALESCE(excluded.tg_photo, users.tg_photo)",
+            (uid, name, username, now, now, tg_photo),
         )
         return self.one("SELECT * FROM users WHERE id=?", (uid,))
 

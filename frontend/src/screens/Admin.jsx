@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api, label } from '../api.js'
-import { Chip } from '../Fx.jsx'
+import { Avatar, Chip } from '../Fx.jsx'
 import { t } from '../i18n.js'
 
 const SECTIONS = [['overview', t('Огляд')], ['balance', t('Баланси')], ['withdrawals', t('Виведення')], ['matches', t('Матчі')], ['tickets', t('Звернення')], ['modes', t('Режими')], ['audit', t('Аудит')]]
-const ts = (t) => new Date(t * 1000).toLocaleString('uk-UA')
+const ts = (sec) => new Date(sec * 1000).toLocaleString('uk-UA')
 
 // window.prompt не працює в деяких клієнтах Telegram — власне модальне вікно
 let openAsk = null
@@ -192,6 +192,12 @@ function Balances({ toast, reloadMe }) {
       setTarget(target ? { ...target } : null)
     } catch (e) { toast(e.message) }
   }
+  const removeAvatar = async (u) => {
+    const reason = await ask(t('Причина видалення аватарки?'))
+    if (!reason) return
+    await api('/api/admin/avatar/remove', { user_id: u.id, reason }).catch((e) => toast(e.message))
+    search()
+  }
   const ban = async (u) => {
     const reason = await ask(u.banned ? t('Причина розблокування?') : t('Причина блокування?'))
     if (!reason) return
@@ -215,10 +221,12 @@ function Balances({ toast, reloadMe }) {
         <ul className="list">
           {users.map((u) => (
             <li key={u.id} className={target?.id === u.id ? 'selected' : ''}>
-              <div onClick={() => setTarget(u)}><b>{u.name}{u.banned ? ' 🚫' : ''}</b>
+              <Avatar url={u.avatar_url} name={u.name} />
+              <div className="grow" onClick={() => setTarget(u)}><b>{u.name}{u.banned ? ' 🚫' : ''}</b>
                 <small>{u.id}{u.username ? ` · @${u.username}` : ''}</small></div>
               <div className="right"><b>{u.balance}</b>
-                <button className="link" onClick={() => ban(u)}>{u.banned ? t('розбан') : t('бан')}</button></div>
+                <button className="link" onClick={() => ban(u)}>{u.banned ? t('розбан') : t('бан')}</button>
+                {u.avatar_url && <button className="link" onClick={() => removeAvatar(u)}>{t('прибрати фото')}</button>}</div>
             </li>
           ))}
         </ul>
@@ -226,9 +234,9 @@ function Balances({ toast, reloadMe }) {
       <section className="card-box">
         <h3>{t('Транзакції:') + ' '}{target ? target.name : t('банк')}</h3>
         <ul className="list">
-          {tx.map((t) => (
-            <li key={t.id}><div><b>{t.kind}</b><small>{ts(t.created_at)} {t.reason || ''} {t.ref || ''}</small></div>
-              <b className={t.amount > 0 ? 'plus' : 'minus'}>{t.amount}</b></li>
+          {tx.map((row) => (
+            <li key={row.id}><div><b>{row.kind}</b><small>{ts(row.created_at)} {row.reason || ''} {row.ref || ''}</small></div>
+              <b className={row.amount > 0 ? 'plus' : 'minus'}>{row.amount}</b></li>
           ))}
         </ul>
       </section>
@@ -295,22 +303,22 @@ function Tickets({ toast }) {
   const [list, setList] = useState([])
   const load = useCallback(() => api('/api/admin/tickets').then((r) => setList(r.tickets)).catch((e) => toast(e.message)), [toast])
   useEffect(() => { load() }, [load])
-  const answer = async (t) => {
+  const answer = async (tk) => {
     const a = await ask(t('Відповідь гравцю:'))
     if (!a) return
-    await api('/api/admin/tickets/answer', { ticket_id: t.id, answer: a }).catch((e) => toast(e.message))
+    await api('/api/admin/tickets/answer', { ticket_id: tk.id, answer: a }).catch((e) => toast(e.message))
     load()
   }
   return (
     <section className="card-box">
       <ul className="list">
         {list.length === 0 && <li className="hint">{t('Звернень немає')}</li>}
-        {list.map((t) => (
-          <li key={t.id}>
-            <div><b>№{t.id} · {t.status === 'open' ? t('🟡 відкрите') : t('✅ закрите')}</b>
-              <small>{t('від') + ' '}{t.user_id} · {ts(t.created_at)}{t.match_id ? t(' · матч {0}', t.match_id) : ''}</small>
-              <p>{t.text}</p>{t.answer && <small>{t('Відповідь:') + ' '}{t.answer}</small>}</div>
-            {t.status === 'open' && <button className="btn small" onClick={() => answer(t)}>{t('Відповісти')}</button>}
+        {list.map((tk) => (
+          <li key={tk.id}>
+            <div><b>№{tk.id} · {tk.status === 'open' ? t('🟡 відкрите') : t('✅ закрите')}</b>
+              <small>{t('від') + ' '}{tk.user_id} · {ts(tk.created_at)}{tk.match_id ? t(' · матч {0}', tk.match_id) : ''}</small>
+              <p>{tk.text}</p>{tk.answer && <small>{t('Відповідь:') + ' '}{tk.answer}</small>}</div>
+            {tk.status === 'open' && <button className="btn small" onClick={() => answer(tk)}>{t('Відповісти')}</button>}
           </li>
         ))}
       </ul>

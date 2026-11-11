@@ -30,8 +30,8 @@ export default function Lobby({ me, send }) {
     if (view !== 'rooms') return
     const load = () => api('/api/lobby').then((r) => setRooms(r.rooms)).catch(() => {})
     load()
-    const t = setInterval(load, 4000)
-    return () => clearInterval(t)
+    const timer = setInterval(load, 4000)
+    return () => clearInterval(timer)
   }, [view])
 
   const fee = Math.floor((stake * modes.commission_percent) / 100)
@@ -100,7 +100,7 @@ export default function Lobby({ me, send }) {
           <input type="checkbox" checked={cheating} onChange={(e) => setCheating(e.target.checked)} />
           {' ' + t('🃏 Режим «Шулер» — можна мухлювати')}
         </label>
-        {cheating && <p className="hint">{t('Можна відбиватися будь-якою картою й підкидати будь-що. Помітили мухлювання — торкніться карти, і вона повернеться мухлярові. Боти теж мухлюють і ловлять.')}</p>}
+        {cheating && <p className="hint">{t('Можна відбиватися будь-якою картою й підкидати будь-що. Помітили мухлювання — торкніться карти, і вона повернеться мухлярові.')}</p>}
         <h4>{t('Час на хід')}</h4>
         <Seg value={turn} onChange={setTurn} options={[[20, t('20 с')], [30, t('30 с')], [60, t('60 с')]]} />
       </section>

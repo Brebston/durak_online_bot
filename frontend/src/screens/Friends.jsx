@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { t } from '../i18n.js'
+import { Avatar } from '../Fx.jsx'
 
 export default function Friends({ me, toast, reloadMe, incoming, tick }) {
   const [data, setData] = useState(null)
@@ -16,8 +17,8 @@ export default function Friends({ me, toast, reloadMe, incoming, tick }) {
 
   useEffect(() => {
     if (q.trim().length < 2) { setFound(null); return }
-    const t = setTimeout(() => api(`/api/users/search?q=${encodeURIComponent(q)}`).then((r) => setFound(r.users)).catch(() => {}), 300)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => api(`/api/users/search?q=${encodeURIComponent(q)}`).then((r) => setFound(r.users)).catch(() => {}), 300)
+    return () => clearTimeout(timer)
   }, [q])
 
   const request = async (u) => {
@@ -69,7 +70,8 @@ export default function Friends({ me, toast, reloadMe, incoming, tick }) {
             {found.length === 0 && <li className="hint">{t('Нікого не знайдено')}</li>}
             {found.map((u) => (
               <li key={u.id}>
-                <div><b><span className={`online ${u.online ? 'on' : ''}`} />{u.name}</b>
+                <Avatar url={u.avatar} name={u.name} />
+                <div className="grow"><b><span className={`online ${u.online ? 'on' : ''}`} />{u.name}</b>
                   <small>{u.username ? `@${u.username} · ` : ''}ID {u.id}</small></div>
                 {u.friend ? <span className="hint">{t('друг')}</span>
                   : <button className="btn small" disabled={u.requested} onClick={() => request(u)}>{u.requested ? t('Надіслано') : t('+ Додати')}</button>}
@@ -105,7 +107,8 @@ export default function Friends({ me, toast, reloadMe, incoming, tick }) {
         <ul className="list">
           {(data?.friends || []).map((f) => (
             <li key={f.id}>
-              <div><b><span className={`online ${f.online ? 'on' : ''}`} />{f.name}<span className="lvl">{f.lvl}</span></b>
+              <Avatar url={f.avatar} name={f.name} />
+              <div className="grow"><b><span className={`online ${f.online ? 'on' : ''}`} />{f.name}<span className="lvl">{f.lvl}</span></b>
                 <small>{f.online ? t('в мережі') : t('не в мережі')}</small></div>
               <div className="row">
                 <button className="btn small" onClick={() => setTransferWith(f)}>{t('Переказати')}</button>
@@ -158,7 +161,7 @@ function Dialog({ friend, me, toast, back, incoming, onRemove }) {
     <div className="dialog">
       <div className="row between">
         <button className="link" onClick={back}>{t('← Друзі')}</button>
-        <b>{friend.name}</b>
+        <b className="row"><Avatar url={friend.avatar} name={friend.name} size={28} />{friend.name}</b>
         <button className="link danger" onClick={() => onRemove(friend)}>{t('Видалити')}</button>
       </div>
       <div className="dm-list" ref={listRef}>

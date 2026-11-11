@@ -3,7 +3,7 @@ import { api, haptic, rankOf, suitOf, SUIT, tg } from '../api.js'
 import { Chip } from '../Fx.jsx'
 import { sfx } from '../sounds.js'
 import { inside, nearestPairs, resolveDrop } from '../dnd.js'
-import { Victory } from '../Fx.jsx'
+import { Avatar, Victory } from '../Fx.jsx'
 import { t } from '../i18n.js'
 
 const LEVELS = [['easy', t('Легкий')], ['medium', t('Середній')], ['hard', t('Сильний')]]
@@ -32,8 +32,8 @@ function useNow(active) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!active) return
-    const t = setInterval(() => setNow(Date.now()), 250)
-    return () => clearInterval(t)
+    const timer = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(timer)
   }, [active])
   return now
 }
@@ -100,7 +100,7 @@ function Waiting({ room, send, onExit, me, serverNow }) {
           ) : <p className="hint">{t('Безкоштовна гра')}</p>}
           <ul className="seats">
             {room.seats.map((s) => (
-              <li key={s.pid}><div className={`mini-back cb-${s.back}`} /> {s.name}{s.you ? t(' (ви)') : ''}<span className="lvl">{s.lvl}</span>{s.bot && <span className="badge">🤖</span>}</li>
+              <li key={s.pid}><Avatar url={s.avatar} name={s.name} size={30} /> {s.name}{s.you ? t(' (ви)') : ''}<span className="lvl">{s.lvl}</span>{s.bot && <span className="badge">🤖</span>}</li>
             ))}
             {Array.from({ length: free }).map((_, i) => <li key={i} className="empty">{t('Вільне місце…')}</li>)}
           </ul>
@@ -303,8 +303,8 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
 
   useEffect(() => {
     if (!frozen) return
-    const t = setTimeout(() => sweep(frozen), 950)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => sweep(frozen), 950)
+    return () => clearTimeout(timer)
   }, [frozen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // результат «Спіймати» (режим «Шулер»)
@@ -317,8 +317,8 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
       ? { ok: true, text: last.cheater === myId ? t('Вас спіймали на мухлюванні!') : t('{0} спіймав мухляра: {1}', who, cheater) }
       : { ok: false, text: last.player === myId ? t('Мухлювання не було') : t('{0}: хибна тривога', who) })
     if (last.caught) { haptic('heavy'); sfx.play('take') }
-    const t = setTimeout(() => setCatchMsg(null), 2200)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setCatchMsg(null), 2200)
+    return () => clearTimeout(timer)
   }, [last?.n]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useLayoutEffect(() => {
@@ -421,7 +421,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
           return (
             <div key={p.id} data-pid={p.id} className={`opp ${waiting ? 'turn' : ''} ${p.out ? 'out' : ''}`}>
               {bubbles[p.id] && <div className="bubble">{bubbles[p.id].emoji || bubbles[p.id].text}</div>}
-              <div className="opp-name">{s.bot ? '🤖 ' : ''}{s.name}<span className="lvl">{s.lvl}</span></div>
+              <div className="opp-name"><Avatar url={s.avatar} name={s.name} size={22} />{s.bot ? '🤖 ' : ''}{s.name}<span className="lvl">{s.lvl}</span></div>
               <Backs n={p.cards} back={s.back} />
               <div className="opp-meta">
                 {p.cards}{' ' + t('карт')}{game.attacker === p.id && playing && <span className="tag atk">{t('атакує')}</span>}

@@ -195,6 +195,13 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   const [drag, setDrag] = useState(null)
   const [pending, setPending] = useState(null)
   const [ghosts, setGhosts] = useState(null)
+  // ширина екрана — щоб уся рука вміщалася без прокрутки
+  const [vw, setVw] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setVw(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const dragRef = useRef(null)
   const feltRef = useRef(null)
   const tableRef = useRef(null)
@@ -405,6 +412,13 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   const bubbles = {}
   for (const m of room.chat || []) if (serverNow / 1000 - m.ts < 3.5) bubbles[m.pid] = m
 
+  // скільки карти «виглядає» з-під сусідньої: що більше карт, то щільніше (але кут з рангом видно завжди)
+  const CARD_W = 56
+  const handN = game.hand.length
+  const handAvail = Math.min(vw, 640) - 20
+  const handStep = handN > 1 ? Math.max(16, Math.min(42, (handAvail - CARD_W) / (handN - 1))) : 0
+  const handFits = handN <= 1 || CARD_W + handStep * (handN - 1) <= handAvail
+
   const won = result && !result.cancelled && !result.draw && result.loser !== myId
 
   return (
@@ -416,7 +430,10 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
           return (
             <div key={p.id} data-pid={p.id} className={`opp ${waiting ? 'turn' : ''} ${p.out ? 'out' : ''}`}>
               {bubbles[p.id] && <div className="bubble">{bubbles[p.id].emoji || bubbles[p.id].text}</div>}
-              <div className="opp-name"><Avatar url={s.avatar} name={s.name} size={22} />{s.bot ? '🤖 ' : ''}{s.name}<span className="lvl">{s.lvl}</span></div>
+              <div className="opp-head">
+                <div className="opp-ava"><Avatar url={s.avatar} name={s.name} size={30} /><span className="lvl">{s.lvl}</span></div>
+                <div className="opp-name">{s.bot ? ' ' : ''}{s.name}</div>
+              </div>
               <Backs n={p.cards} back={s.back} />
               <div className="opp-meta">
                 {p.cards}{' ' + t('карт')}{game.attacker === p.id && playing && <span className="tag atk">{t('атакує')}</span>}
@@ -467,15 +484,16 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
           {take && <button className="btn warn" onClick={() => act(take)}>{t('Беру')}</button>}
           {pass && <button className="btn primary" onClick={() => act(pass)}>{game.taking ? t('Пас') : t('Бито')}</button>}
         </div>
-        <div className="hand" ref={handRef}>
-          {game.hand.map((c) => {
+        <div className={`hand ${handFits ? '' : 'scroll'}`} ref={handRef}>
+          {game.hand.map((c, i) => {
             const mine = cardActs(c).filter((a) => a.type !== 'catch')
             const playable = mine.some((a) => !a.cheat)
             const cheatable = !playable && mine.length > 0
             const dragging = drag?.card === c && drag.moved
-            const style = dragging
-              ? { transform: `translate(${drag.x - drag.x0}px, ${drag.y - drag.y0}px) rotate(${(drag.x - drag.x0) / 25}deg) scale(1.15)` }
-              : undefined
+            const style = {
+              marginLeft: i === 0 ? 0 : handStep - CARD_W,
+              ...(dragging ? { transform: `translate(${drag.x - drag.x0}px, ${drag.y - drag.y0}px) rotate(${(drag.x - drag.x0) / 25}deg) scale(1.15)` } : {}),
+            }
             return (
               <Card key={c} c={c}
                 className={`${sel === c ? 'sel' : ''} ${playable ? 'play' : ''} ${cheatable ? 'cheaty' : ''} ${myTurn && !playable && !cheatable ? 'dim' : ''} ${dragging ? 'dragging' : ''} ${pending === c ? 'pending' : ''}`}

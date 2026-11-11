@@ -276,7 +276,7 @@ function Matches({ toast }) {
             <li key={e.seq}>
               <small>{new Date(e.ts * 1000).toLocaleTimeString('uk-UA')}</small>{' '}
               <b>{name[e.actor] || e.actor || t('система')}</b>{' '}
-              {e.type === 'move' ? `${e.data.type}${e.data.card ? ' ' + label(e.data.card) : ''}${e.data.bout_end ? ` → ${e.data.bout_end === 'take' ? t('взяв') : t('бито')}` : ''}${e.data.bot ? ' 🤖' : ''}` : e.type}
+              {e.type === 'move' ? `${e.data.type}${e.data.card ? ' ' + label(e.data.card) : ''}${e.data.bout_end ? ` → ${e.data.bout_end === 'take' ? t('взяв') : t('бито')}` : ''}${e.data.bot ? ' ' : ''}` : e.type}
             </li>
           ))}
         </ol>

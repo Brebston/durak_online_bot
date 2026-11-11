@@ -270,3 +270,22 @@ details p { color: #d6e6dd; font-size: 14px; }
 .profile-head h3 { margin: 0 0 6px; }
 .avatar-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .avatar-actions label.btn { cursor: pointer; }
+
+
+/* ================= v5: верстка столу на телефонах ================= */
+/* відступ знизу під «смужку» iPhone: системний або від Telegram (Bot API 8.0) */
+:root { --safe-b: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px), var(--tg-content-safe-area-inset-bottom, 0px)); }
+.me-zone { padding-bottom: calc(10px + max(var(--safe-b), 16px)) !important; }
+.tabbar { padding-bottom: max(var(--safe-b), 10px) !important; }
+.content { padding-bottom: calc(90px + var(--safe-b)) !important; }
+.me-bar { padding-top: 6px; }
+
+.opp { max-width: 160px; padding: 6px 6px 8px; overflow: visible; }
+.opp-head { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.opp-ava { position: relative; line-height: 0; }
+.opp-ava .lvl { position: absolute; right: -16px; bottom: -2px; margin: 0; box-shadow: 0 0 0 2px #10261d; }
+.opp-name { display: block !important; max-width: 100%; font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.hand { justify-content: center; overflow-x: visible; padding-left: 10px; padding-right: 10px; }
+.hand.scroll { justify-content: flex-start; overflow-x: auto; }
+.hand .pcard, .hand .pcard:first-child { margin-left: 0; }

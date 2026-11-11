@@ -3,9 +3,30 @@ updates:
   - package-ecosystem: pip
     directory: /backend
     schedule: { interval: weekly }
+    groups:
+      python-deps:
+        patterns: ["*"]
+    ignore:
+      # мажорні версії оновлюємо вручну — вони часто ламають сумісність
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly }
+    groups:
+      # react і react-dom мають оновлюватися тільки разом
+      react:
+        patterns: ["react", "react-dom"]
+      build-tools:
+        patterns: ["vite", "vitest", "@vitejs/*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]

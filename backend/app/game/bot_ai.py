@@ -15,16 +15,82 @@ def _value(card: str, trump: str) -> int:
     return rank_of(card) + (100 if suit_of(card) == trump else 0)
 
 
+CHEAT_RATE = {"easy": 0.3, "medium": 0.22, "hard": 0.15}
+CATCH_RATE = {"easy": 0.35, "medium": 0.6, "hard": 0.85}
+
+
 def choose_action(view: dict, level: str = "medium", rng: random.Random | None = None) -> dict | None:
     rng = rng or random.Random()
-    actions = view["actions"]
+    all_actions = view["actions"]
+    # чесні ходи окремо від мухлювання й «спіймати»
+    actions = [a for a in all_actions if not a.get("cheat") and a["type"] != "catch"]
     if not actions:
         return None
     if level == "easy":
-        return _easy(view, actions, rng)
-    if level == "hard":
-        return _monte_carlo(view, actions, rng)
-    return _smart(view, actions, rng, hard=False)
+        act = _easy(view, actions, rng)
+    elif level == "hard":
+        act = _monte_carlo(view, actions, rng)
+    else:
+        act = _smart(view, actions, rng, hard=False)
+    if view["rules"].get("cheating"):
+        act = _maybe_cheat(view, all_actions, act, level, rng)
+    return act
+
+
+def _maybe_cheat(view: dict, actions: list[dict], honest: dict, level: str, rng: random.Random) -> dict:
+    """У режимі «Шулер» бот інколи мухлює — як людина: коли інакше довелося б брати карти,
+    або підкидає «не ту» дрібну карту, коли в захисника мало карт."""
+    trump = view["trump"]
+    rate = CHEAT_RATE.get(level, 0.2)
+    cheats = [a for a in actions if a.get("cheat")]
+    if not cheats or rng.random() > rate:
+        return honest
+    if honest["type"] == "take":
+        defends = [a for a in cheats if a["type"] == "defend"]
+        # найправдоподібніше: та сама масть, але молодша (або дрібна некозирна)
+        def plausibility(a):
+            att = view["table"][a["target"]][0]
+            same = suit_of(a["card"]) == suit_of(att)
+            return (not same, suit_of(a["card"]) == trump, rank_of(a["card"]))
+        if defends:
+            return min(defends, key=plausibility)
+    if honest["type"] == "pass" and not view["taking"]:
+        defender = next(p for p in view["players"] if p["id"] == view["defender"])
+        throws = [a for a in cheats if a["type"] == "attack" and suit_of(a["card"]) != trump and rank_of(a["card"]) <= 10]
+        if throws and defender["cards"] <= 3:
+            return min(throws, key=lambda a: rank_of(a["card"]))
+    return honest
+
+
+def suspicious_cards(view: dict) -> list[str]:
+    """Карти на столі, які видно що покладені не за правилами (бачить кожен уважний гравець)."""
+    trump = view["trump"]
+    mine = set(view.get("mine_on_table") or [])
+    out = []
+    seen_ranks: set[int] = set()
+    for i, (a, d) in enumerate(view["table"]):
+        if i > 0 and rank_of(a) not in seen_ranks and a not in mine:
+            out.append(a)                      # підкинули ранг, якого не було на столі
+        seen_ranks.add(rank_of(a))
+        if d:
+            if not _beats(a, d, trump) and d not in mine:
+                out.append(d)                  # «побили» карту, яка її не бʼє
+            seen_ranks.add(rank_of(d))
+    return out
+
+
+def catch_decision(view: dict, level: str, rng: random.Random, already: set[str]) -> dict | None:
+    """Чи помітив бот мухлювання. Кожну підозрілу карту бот «оцінює» один раз (already)."""
+    if not view["rules"].get("cheating"):
+        return None
+    catchable = {a["card"] for a in view["actions"] if a["type"] == "catch"}
+    for c in suspicious_cards(view):
+        if c in already or c not in catchable:
+            continue
+        already.add(c)
+        if rng.random() < CATCH_RATE.get(level, 0.5):
+            return {"type": "catch", "card": c}
+    return None
 
 
 # ---------- сильний бот: Монте-Карло по невідомих картах ----------
@@ -76,6 +142,8 @@ def _determinize(view: dict, rng: random.Random):
     g.loser = None
     g.draw = False
     g.surrendered = None
+    g.owner, g.cheats, g.catch_fail, g.last_bout = {}, {}, set(), None
+    g.rules.cheating = False   # у симуляціях — лише чесна гра
     g.attacker = view["attacker"]
     g.defender = view["defender"]
     return g
@@ -185,6 +253,7 @@ def _restore(g, s):
     h.passed = set(passed)
     h.taking, h.bout, h.attacker, h.defender = taking, bout, att, de
     h.status, h.loser, h.draw, h.version = "playing", None, False, 0
+    h.owner, h.cheats, h.catch_fail = {}, {}, set()
     return h
 
 

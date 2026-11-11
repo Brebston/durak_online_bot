@@ -41,3 +41,20 @@ describe('geometry', () => {
     expect(inside({ left: 0, right: 10, top: 0, bottom: 10 }, 15, 5, 3)).toBe(false)
   })
 })
+
+describe('cheat mode', () => {
+  const a = [
+    { type: 'defend', card: '7H', target: 0, cheat: true },
+    { type: 'defend', card: '7H', target: 1 },
+    { type: 'catch', card: '9S' },
+  ]
+  it('без точного влучання бере чесний варіант', () => {
+    expect(resolveDrop(a, '7H', { onTable: true, overPair: null, nearest: [0, 1] }).target).toBe(1)
+  })
+  it('кинув прямо на карту — мухлювання дозволено', () => {
+    expect(resolveDrop(a, '7H', { onTable: true, overPair: 0, nearest: [0, 1] }).cheat).toBe(true)
+  })
+  it('catch не перетягується', () => {
+    expect(resolveDrop(a, '9S', { onTable: true, overPair: null })).toBeNull()
+  })
+})

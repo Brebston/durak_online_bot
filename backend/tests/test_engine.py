@@ -104,3 +104,75 @@ def rank_of(c):
 
 def test_deck():
     assert len(make_deck(36)) == 36 and len(set(make_deck(52))) == 52
+
+
+# ---------------- режим «Шулер» ----------------
+from app.game.bot_ai import catch_decision  # noqa: E402
+
+
+@pytest.mark.parametrize("n", [2, 3, 4])
+def test_cheating_games_terminate(n):
+    rng = random.Random(7)
+    caught = cheated = 0
+    for seed in range(40):
+        players = [f"p{i}" for i in range(n)]
+        g = Game(players, Rules(cheating=True, variant=rng.choice(["podkidnoy", "perevodnoy"])), seed=seed)
+        seen = {p: set() for p in players}
+        steps = 0
+        while g.status == "playing":
+            steps += 1
+            assert steps < 6000
+            moved = False
+            for p in players:
+                c = catch_decision(g.view(p), "medium", rng, seen[p])
+                if c:
+                    ev = g.apply(p, c)
+                    caught += ev["caught"]
+                    moved = True
+                    break
+            if not moved:
+                for p in players:
+                    a = choose_action(g.view(p), rng.choice(["easy", "medium"]), rng)
+                    if a:
+                        cheated += bool(a.get("cheat"))
+                        g.apply(p, a)
+                        moved = True
+                        break
+            assert moved
+            total = len(g.deck) + len(g.discard) + sum(len(h) for h in g.hands.values()) \
+                + sum(1 for pair in g.table for c in pair if c)
+            assert total == 36
+        assert g.draw or g.loser in players
+    print('cheated', cheated, 'caught', caught)
+    assert cheated > 0 and caught > 0
+
+
+def test_catch_returns_cheat_card_and_false_accusation():
+    for seed in range(300):
+        g = Game(["a", "b", "c"], Rules(cheating=True), seed=seed)
+        att, de = g.attacker, g.defender
+        other = next(p for p in g.players if p not in (att, de))
+        g.apply(att, {"type": "attack", "card": g.hands[att][0]})
+        cheat = next((x for x in g.legal_actions(de) if x.get("cheat")), None)
+        honest = next((x for x in g.legal_actions(de) if x["type"] == "defend" and not x.get("cheat")), None)
+        if not cheat:
+            continue
+        card = cheat["card"]
+        g.apply(de, {"type": "defend", "card": card, "target": 0})
+        v = g.view(other)  # мухлювання не видно в даних інших гравців
+        assert "cheats" not in v and "owner" not in v and card not in v["mine_on_table"]
+        # хибне звинувачення: атакувальна карта чесна
+        ev = g.apply(other, {"type": "catch", "card": g.table[0][0]})
+        assert ev["caught"] is False
+        assert not any(x["type"] == "catch" for x in g.legal_actions(other))
+        ev = g.apply(att, {"type": "catch", "card": card})
+        assert ev["caught"] and card in g.hands[de] and g.table[0][1] is None
+        _ = honest
+        return
+    pytest.fail("не знайшли розклад")
+
+
+def test_rules_reject_bad_types():
+    for bad in ({"hand_size": "6"}, {"max_table": 50}, {"turn_seconds": 1.5}, {"cheating": "yes"}, {"variant": 1}):
+        with pytest.raises(ValueError):
+            Rules.from_dict(bad)

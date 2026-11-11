@@ -236,3 +236,24 @@ details p { color: #d6e6dd; font-size: 14px; }
 .bank-card { background: linear-gradient(150deg, rgba(242,193,78,.18), rgba(255,255,255,.05)); border: 1px solid rgba(242,193,78,.35); }
 .bank-sum { font-size: 34px; font-weight: 800; margin: 2px 0 8px; }
 .stats.five { grid-template-columns: repeat(3, 1fr); }
+
+/* ================= v4: шулер, рівні ================= */
+.pcard.cheaty { box-shadow: 0 0 0 2px rgba(229,72,77,.55), 0 2px 5px rgba(0,0,0,.35); }
+.catch-banner { position: fixed; left: 50%; top: 38%; transform: translateX(-50%); z-index: 35; background: #2a2430; border: 2px solid var(--muted);
+  padding: 10px 16px; border-radius: 14px; font-weight: 800; box-shadow: 0 10px 30px rgba(0,0,0,.6); animation: bubble 2.2s ease forwards; white-space: nowrap; }
+.catch-banner.ok { border-color: var(--red); background: #3a1418; }
+.cheat-hint { position: fixed; left: 8px; bottom: calc(var(--hand-h, 0px) + 4px); font-size: 11px; color: var(--muted); z-index: 4; pointer-events: none; display: none; }
+.table-screen .cheat-hint { display: block; position: absolute; top: 132px; left: 0; right: 0; text-align: center; }
+.lvl { display: inline-block; margin-left: 5px; min-width: 18px; padding: 0 5px; border-radius: 8px; background: linear-gradient(135deg, #f2c14e, #c8901a);
+  color: #2b1d00; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center; vertical-align: 1px; }
+.level-box { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
+.level-num { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; font-size: 18px;
+  background: linear-gradient(135deg, #f2c14e, #c8901a); color: #2b1d00; box-shadow: 0 0 0 3px rgba(242,193,78,.3); }
+.xpbar { flex: 1; height: 10px; border-radius: 5px; background: rgba(0,0,0,.3); overflow: hidden; }
+.xpbar i { display: block; height: 100%; background: linear-gradient(90deg, #f2c14e, #ffe18a); }
+.lock { font-size: 12px; color: var(--muted); }
+.cb-back_bronze { background: repeating-radial-gradient(circle at 50% 50%, #8c5a2b 0 3px, #b07a42 3px 6px); border-color: #e8c49a !important; }
+.cb-back_silver { background: repeating-linear-gradient(45deg, #9aa4ad 0 4px, #cfd6dc 4px 8px); border-color: #fff !important; }
+.cb-back_gold { background: repeating-conic-gradient(from 0deg, #c8901a 0 15deg, #f2c14e 15deg 30deg); border-color: #fff6c2 !important; box-shadow: 0 0 6px #f2c14e; }
+.cheat-toggle { margin-top: 10px; font-weight: 600; }
+.hint.warn { color: #ffcf7a; margin-top: 8px; }

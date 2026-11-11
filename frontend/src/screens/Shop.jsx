@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { api, tg } from '../api.js'
 import { Chip, Intro, Victory } from '../Fx.jsx'
 import { sfx } from '../sounds.js'
+import { t } from '../i18n.js'
 
-const CATS = [['chips', '⭐ Фішки'], ['back', 'Сорочки'], ['table', 'Столи'], ['emoji', 'Смайлики'], ['intro', 'Заставки'], ['victory', 'Перемога']]
+const CATS = [['chips', t('⭐ Фішки')], ['back', t('Сорочки')], ['table', t('Столи')], ['emoji', t('Смайлики')], ['intro', t('Заставки')], ['victory', t('Перемога')]]
 
 export default function Shop({ me, reload, toast }) {
   const [cat, setCat] = useState('chips')
@@ -20,13 +21,13 @@ export default function Shop({ me, reload, toast }) {
       const r = await api('/api/invoice', { stars })
       if (r.link && tg?.openInvoice) {
         tg.openInvoice(r.link, (status) => {
-          if (status === 'paid') { toast('Оплачено! Фішки зараховано.'); setTimeout(reload, 1500) }
-          else if (status === 'failed') toast('Оплата не пройшла')
+          if (status === 'paid') { toast(t('Оплачено! Фішки зараховано.')); setTimeout(reload, 1500) }
+          else if (status === 'failed') toast(t('Оплата не пройшла'))
         })
       } else if (r.link) {
         window.open(r.link, '_blank')
       } else if (r.dev_credited) {
-        toast(`DEV: зараховано ${r.dev_credited}`)
+        toast(t('DEV: зараховано {0}', r.dev_credited))
         reload()
       }
     } catch (e) { toast(e.message) } finally { setBusy(false) }
@@ -38,7 +39,7 @@ export default function Shop({ me, reload, toast }) {
       const r = await api('/api/shop/buy', { item_id: item.id })
       setShop((s) => ({ ...s, ...r }))
       sfx.play('coin')
-      toast(`«${item.name}» ваше!`)
+      toast(t('«{0}» ваше!', t(item.name)))
       reload()
     } catch (e) { toast(e.message) } finally { setBusy(false) }
   }
@@ -63,18 +64,19 @@ export default function Shop({ me, reload, toast }) {
       {cat === 'chips' && (
         <>
           <section className="card-box">
-            <h3>Баланс: {me.balance.chips} <Chip /></h3>
-            <p className="hint">1 ⭐ = {me.shop.rate} фішок. На фішки можна грати, купувати оформлення або подати
-              заявку на ручну виплату в розділі «Вивід». Виплату перевіряє й надсилає адміністратор.</p>
+            <h3>{t('Баланс:') + ' '}{me.balance.chips} <Chip /></h3>
+            <p className="hint">1 ⭐ = {me.shop.rate}{' ' + t(
+              'фішок. На фішки можна грати, купувати оформлення або подати заявку на ручну виплату в розділі «Вивід». Виплату перевіряє й надсилає адміністратор.'
+            )}</p>
           </section>
           <div className="packs">
             {me.shop.packs.map((s) => (
               <button key={s} className="pack" disabled={busy || !me.shop.enabled} onClick={() => buyStars(s)}>
-                <b>{s * me.shop.rate} <Chip size={20} /></b><span>фішок</span><em>{s} ⭐</em>
+                <b>{s * me.shop.rate} <Chip size={20} /></b><span>{t('фішок')}</span><em>{s} ⭐</em>
               </button>
             ))}
           </div>
-          {!me.shop.enabled && <p className="error">Оплата тимчасово недоступна.</p>}
+          {!me.shop.enabled && <p className="error">{t('Оплата тимчасово недоступна.')}</p>}
         </>
       )}
 
@@ -91,19 +93,20 @@ export default function Shop({ me, reload, toast }) {
                   {item.type === 'table' && <div className={`table-preview tb-${item.id}`} />}
                   {item.type === 'emoji' && <div className="emoji-grid">{item.emojis.map((e) => <span key={e}>{e}</span>)}</div>}
                   {(item.type === 'intro' || item.type === 'victory') && (
-                    <button className="btn small" onClick={() => play(item)}>▶ Переглянути</button>
+                    <button className="btn small" onClick={() => play(item)}>{t('▶ Переглянути')}</button>
                   )}
                 </div>
-                <b>{item.name}</b>
-                {equipped ? <span className="hint">✓ Встановлено</span>
+                <b>{t(item.name)}</b>
+                {equipped ? <span className="hint">{t('✓ Встановлено')}</span>
                   : owned ? (item.type === 'emoji'
-                    ? <span className="hint">✓ Ваше</span>
-                    : <button className="btn small" onClick={() => equip(item)}>Встановити</button>)
-                    : <button className="btn small primary" disabled={busy || me.available.chips < item.price} onClick={() => buy(item)}>
-                      {item.price} <Chip />
-                    </button>}
+                    ? <span className="hint">{t('✓ Ваше')}</span>
+                    : <button className="btn small" onClick={() => equip(item)}>{t('Встановити')}</button>)
+                    : item.level ? <span className="lock">{t('🔒 Рівень') + ' '}{item.level}</span>
+                      : <button className="btn small primary" disabled={busy || me.available.chips < item.price} onClick={() => buy(item)}>
+                        {item.price} <Chip />
+                      </button>}
               </div>
-            )
+            );
           })}
         </div>
       )}
@@ -111,5 +114,5 @@ export default function Shop({ me, reload, toast }) {
       {preview?.type === 'intro' && <Intro id={preview.id} />}
       {preview?.type === 'victory' && <Victory id={preview.id} />}
     </div>
-  )
+  );
 }

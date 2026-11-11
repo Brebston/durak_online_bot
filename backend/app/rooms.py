@@ -14,10 +14,12 @@ from typing import Any
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
-from .game.bot_ai import LEVELS, choose_action
+from .game.bot_ai import LEVELS, catch_decision, choose_action
 from .game.engine import Game, IllegalMove, Rules
 from .ledger import BANK, Ledger, LedgerError, acc
+from .levels import level_of, match_xp
 from .personas import TEXTS, pick_reaction, random_look, random_nick
+from .shop import BY_ID
 
 log = logging.getLogger("rooms")
 
@@ -28,7 +30,11 @@ MAX_TIMEOUTS = 3
 
 
 class RoomError(Exception):
-    pass
+    """Текст помилки — це ключ перекладу (українською) з параметрами {0}, {1}…"""
+
+    def __init__(self, key: str, *args):
+        super().__init__(key.format(*args) if args else key)
+        self.key, self.args_ = key, [str(a) for a in args]
 
 
 @dataclass
@@ -44,6 +50,8 @@ class Seat:
     emojis: list[str] = field(default_factory=list)  # смайлики бота
     chatty: float = 0.0                               # наскільки бот емоційний
     last_emote: float = 0.0
+    seen: set = field(default_factory=set)            # карти, які бот уже «перевірив» на мухлювання
+    lvl: int = 1                                       # рівень гравця (для відображення)
 
     @property
     def account(self) -> str:
@@ -52,7 +60,7 @@ class Seat:
     def public(self, me: int | None, hide_bot: bool = False) -> dict:
         bot = self.bot and not hide_bot
         return {"pid": self.pid, "name": self.name, "bot": bot, "level": self.level if bot else None,
-                "you": me is not None and self.user_id == me, "back": self.back}
+                "you": me is not None and self.user_id == me, "back": self.back, "lvl": self.lvl}
 
 
 @dataclass
@@ -71,6 +79,8 @@ class Room:
     fill_task: asyncio.Task | None = None
     chat: list[dict] = field(default_factory=list)
     last: dict | None = None  # останній хід (для анімації на клієнті)
+    last_ts: float = 0
+    idle_since: float = 0
     moves: int = 0
     status: str = "waiting"   # waiting | playing | finished | cancelled
     game: Game | None = None
@@ -105,7 +115,7 @@ class RoomManager:
         self.shop = shop
         self.social = social
         # викликається, якщо запрошений друг не в мережі: (uid, text, room_id) -> None
-        self.notify_offline: Callable[[int, str, str], Awaitable[None]] | None = None
+        self.notify_offline: Callable[[int, str, int, str], Awaitable[None]] | None = None
         self.online: Callable[[int], bool] = lambda uid: False
         self.db = db
         self.ledger = ledger
@@ -182,6 +192,7 @@ class RoomManager:
     def _remember(self, room: Room, ev: dict) -> None:
         room.moves += 1
         room.last = {**ev, "n": room.moves}
+        room.last_ts = time.time()
         self._react(room, ev)
 
     # ---------- реакції ботів (смайлики) ----------
@@ -191,6 +202,12 @@ class RoomManager:
             for s in room.seats:
                 if s.bot:
                     self._bot_emote(room, s, "i_took" if s.pid == taker else "they_took", 1.0 if s.pid == taker else 0.5)
+        elif ev.get("type") == "catch" and ev.get("caught"):
+            for s in room.seats:
+                if s.bot and s.pid == ev.get("cheater"):
+                    self._bot_emote(room, s, "i_took", 1.2)
+                elif s.bot and s.pid == ev.get("player"):
+                    self._bot_emote(room, s, "i_transferred", 1.2)
         elif ev.get("type") == "transfer":
             s = room.seat_by_pid(ev.get("player"))
             if s and s.bot:
@@ -271,7 +288,7 @@ class RoomManager:
         u = self.db.user(uid)
         today = time.strftime("%Y-%m-%d")
         if u and u["free_day"] == today and u["free_count"] >= limit:
-            raise RoomError(f"Безкоштовна гра доступна {limit} раз(и) на день. Спробуйте завтра або зіграйте на фішки.")
+            raise RoomError("Безкоштовна гра доступна {0} раз(и) на день. Спробуйте завтра або зіграйте на фішки.", limit)
 
     async def find_match(self, user: dict, mode: str, size: int, stake: int, rules: dict | None) -> Room:
         r = self._validate_params(user["id"], mode, size, stake, rules)
@@ -288,7 +305,7 @@ class RoomManager:
                      name: str = "", listed: bool = False) -> Room:
         r = self._validate_params(user["id"], mode, size, stake, rules)
         name = " ".join((name or "").split())[:40]
-        room = Room(secrets.token_hex(4), mode, stake if mode == "stake" else 0, size, r, private, user["id"],
+        room = Room(secrets.token_hex(6), mode, stake if mode == "stake" else 0, size, r, private, user["id"],
                     name=name or f"Кімната {user.get('name', '')}".strip(), listed=bool(private and listed))
         self.rooms[room.id] = room
         try:
@@ -317,7 +334,8 @@ class RoomManager:
                 except RoomError as e:
                     # напр. порожній банк гри: продовжуємо чекати людей, повторимо пізніше
                     for s in room.humans():
-                        await self.send(s.user_id, {"type": "error", "message": f"{e}. Чекаємо живих гравців…"})
+                        await self.send(s.user_id, {"type": "error", "message": f"{e}. Чекаємо живих гравців…",
+                                                    "key": "{0}. Чекаємо живих гравців…", "args": [str(e)]})
                     room.fill_at = time.time() + 30
                     await self.broadcast(room)
         except asyncio.CancelledError:
@@ -348,6 +366,8 @@ class RoomManager:
             seat = Seat(pid=f"u{uid}", name=user.get("name") or str(uid), user_id=uid)
             if self.shop:
                 seat.back = self.shop.equipped(uid)["back"]
+            u = self.db.user(uid)
+            seat.lvl = level_of(int(u["xp"] or 0)) if u else 1
             if room.mode == "stake":
                 try:
                     seat.hold_id = self.ledger.hold(acc(uid), room.stake, room.id)
@@ -384,6 +404,9 @@ class RoomManager:
                 look = random_look(self.rng)
                 seat = Seat(pid=pid, name=name, bot=True, level=lv, back=look["back"],
                             emojis=look["emojis"], chatty=look["chatty"])
+                # правдоподібний рівень (не менший, ніж потрібно для «нагородної» сорочки)
+                need = BY_ID.get(seat.back, {}).get("level", 1)
+                seat.lvl = max(need, min(40, int(self.rng.triangular(1, 35, 6))))
                 if room.mode == "stake":
                     try:
                         seat.hold_id = self.ledger.hold(BANK, room.stake, room.id)
@@ -472,12 +495,18 @@ class RoomManager:
             if version is not None and version != room.game.version:
                 raise RoomError("stale")  # повторний/застарілий запит — відхиляємо
             act = {k: action.get(k) for k in ("type", "card", "target") if action.get(k) is not None}
+            if not isinstance(act.get("type"), str) or not isinstance(act.get("card", ""), str) \
+                    or not isinstance(act.get("target", 0), int) or isinstance(act.get("target"), bool):
+                raise RoomError("Недозволений хід")
+            is_cheat = any(la.get("cheat") and {k: v for k, v in la.items() if k != "cheat"} == act
+                           for la in room.game.legal_actions(seat.pid))
             try:
                 ev = room.game.apply(seat.pid, act)
             except IllegalMove as e:
                 raise RoomError(str(e))
             seat.timeouts = 0
-            self.log_event(room, seat.pid, "move", ev)
+            # у журнал (бачить лише адмін після матчу) — чи був хід мухлюванням
+            self.log_event(room, seat.pid, "move", {**ev, "cheat": is_cheat})
             self._remember(room, ev)
         await self._after_change(room)
 
@@ -513,12 +542,42 @@ class RoomManager:
         try:
             while room.status == "playing":
                 g = room.game
+                # після відбою даємо людям роздивитися стіл, перш ніж бот піде далі
+                if room.last and room.last.get("bout_end"):
+                    pause = 1.3 - (time.time() - room.last_ts)
+                    if pause > 0:
+                        await asyncio.sleep(pause)
+                        continue
+                version = g.version
+                # «Шулер»: боти стежать за столом і інколи ловлять мухлювання
+                if room.rules.cheating:
+                    catcher = None
+                    for s in room.seats:
+                        if s.bot and g.is_active(s.pid):
+                            c = catch_decision(g.view(s.pid), s.level, self.rng, s.seen)
+                            if c:
+                                catcher = (s, c)
+                                break
+                    if catcher:
+                        await asyncio.sleep(self.rng.uniform(0.9, 2.4))
+                        s, c = catcher
+                        async with room.lock:
+                            if room.status != "playing" or c not in g.legal_actions(s.pid):
+                                continue
+                            ev = g.apply(s.pid, c)
+                            self.log_event(room, s.pid, "move", {**ev, "bot": True})
+                            self._remember(room, ev)
+                        if g.status == "finished":
+                            await self._finish(room)
+                            return
+                        self._reset_deadline(room)
+                        await self.broadcast(room)
+                        continue
                 awaited = set(g.awaited())
                 bots = [s for s in room.seats if s.bot and s.pid in awaited]
                 if not bots:
                     return
                 seat = bots[0]
-                version = g.version
                 await asyncio.sleep(self.rng.uniform(0.7, 1.6))
                 if room.status != "playing" or g.version != version:
                     continue
@@ -535,7 +594,7 @@ class RoomManager:
                     except IllegalMove:
                         log.warning("bot illegal move %s", act)
                         continue
-                    self.log_event(room, seat.pid, "move", {**ev, "bot": True})
+                    self.log_event(room, seat.pid, "move", {**ev, "bot": True, "cheat": bool(act.get("cheat"))})
                     self._remember(room, ev)
                 if g.status == "finished":
                     await self._finish(room)
@@ -617,6 +676,7 @@ class RoomManager:
         self.db.ex("UPDATE matches SET status='finished', finished_at=?, result=? WHERE id=?",
                    (int(time.time()), json.dumps(room.result), room.match_id))
         self.log_event(room, None, "finish", room.result)
+        await self._award_xp(room)
         if not g.draw:
             for s in room.seats:
                 if s.bot:
@@ -629,6 +689,25 @@ class RoomManager:
             if t and t is not asyncio.current_task():
                 t.cancel()
         asyncio.get_running_loop().call_later(300, lambda: self.rooms.pop(room.id, None))
+
+    async def _award_xp(self, room: Room) -> None:
+        g = room.game
+        opponents = len(room.seats) - 1
+        for s in room.humans():
+            if g.draw:
+                outcome = "draw"
+            elif g.loser == s.pid:
+                outcome = "loss"
+            else:
+                outcome = "win"
+            gain = match_xp(outcome, opponents, g.surrendered == s.pid)
+            if not gain:
+                continue
+            u = self.db.user(s.user_id)
+            before = level_of(int(u["xp"] or 0)) if u else 1
+            self.db.ex("UPDATE users SET xp = xp + ? WHERE id=?", (gain, s.user_id))
+            after = level_of(int(u["xp"] or 0) + gain) if u else 1
+            await self.send(s.user_id, {"type": "xp", "gain": gain, "level": after, "levelup": after > before})
 
     async def admin_cancel(self, admin_id: int, room_id: str, reason: str) -> None:
         room = self.rooms.get(room_id)
@@ -652,6 +731,35 @@ class RoomManager:
                 t.cancel()
         self.rooms.pop(room.id, None)
 
+    async def cleanup_loop(self) -> None:
+        """Кімнати очікування, де вже кілька хвилин немає жодного гравця онлайн, закриваються,
+        а зарезервовані ставки повертаються (щоб фішки не «зависали»)."""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = time.time()
+                for room in list(self.rooms.values()):
+                    if room.status != "waiting":
+                        continue
+                    if any(self.online(s.user_id) for s in room.humans()):
+                        room.idle_since = 0
+                        continue
+                    room.idle_since = room.idle_since or now
+                    if now - room.idle_since > 300:
+                        room.status = "cancelled"
+                        if room.fill_task:
+                            room.fill_task.cancel()
+                        self.ledger.release_room(room.id)
+                        for s in room.humans():
+                            if self.user_room.get(s.user_id) == room.id:
+                                self.user_room.pop(s.user_id, None)
+                        self.rooms.pop(room.id, None)
+                        log.info("closed idle room %s", room.id)
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001
+                log.exception("cleanup failed")
+
     def list_waiting(self) -> list[dict]:
         """Список кімнат, до яких можна приєднатися: власні відкриті кімнати + швидкі ігри в очікуванні."""
         out = []
@@ -659,7 +767,7 @@ class RoomManager:
             if r.status != "waiting" or len(r.seats) >= r.size or (r.private and not r.listed):
                 continue
             out.append({"id": r.id, "name": r.name, "custom": r.private, "mode": r.mode, "stake": r.stake,
-                        "size": r.size, "players": len(r.seats), "variant": r.rules.variant,
+                        "size": r.size, "players": len(r.seats), "variant": r.rules.variant, "cheating": r.rules.cheating,
                         "deck": r.rules.deck_size, "turn": r.rules.turn_seconds,
                         "host": next((s.name for s in r.seats if s.user_id == r.owner), "")})
         out.sort(key=lambda x: (not x["custom"], -x["players"]))
@@ -702,8 +810,7 @@ class RoomManager:
         if self.online(friend_id):
             await self.send(friend_id, payload)
         elif self.notify_offline:
-            text = f"{payload['from']} кличе вас у «Дурака»" + (f" (ставка {room.stake})" if room.stake else "")
-            await self.notify_offline(friend_id, text, room.id)
+            await self.notify_offline(friend_id, payload["from"], room.stake, room.id)
         # поки чекаємо друга — не підсаджуємо ботів одразу
         if room.fill_at:
             room.fill_at = max(room.fill_at, time.time() + 30)

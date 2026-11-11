@@ -9,6 +9,7 @@ import Shop from './screens/Shop.jsx'
 import Friends from './screens/Friends.jsx'
 import Admin from './screens/Admin.jsx'
 import Withdrawals from './screens/Withdrawals.jsx'
+import { lang, t } from './i18n.js'
 
 export default function App() {
   const [me, setMe] = useState(null)
@@ -23,7 +24,12 @@ export default function App() {
   const sock = useRef(null)
   const lastFind = useRef(null)
 
-  const loadMe = useCallback(() => api('/api/me').then((m) => { sfx.setEnabled(m.settings.sound); setMe(m) }).catch((e) => setErr(e.message)), [])
+  const loadMe = useCallback(() => api('/api/me').then((m) => {
+    sfx.setEnabled(m.settings.sound)
+    setMe(m)
+    // мова інтерфейсу потрібна й боту (повідомлення в Telegram)
+    if (m.lang !== lang) api('/api/lang', { lang }).catch(() => {})
+  }).catch((e) => setErr(e.message)), [])
 
   const toast = useCallback((m) => {
     setErr(m)
@@ -50,6 +56,9 @@ export default function App() {
       } else if (m.type === 'left') {
         setRoom(null)
         loadMe()
+      } else if (m.type === 'xp') {
+        if (m.levelup) { sfx.play('win'); toast(t('🎉 Новий рівень {0}!', m.level)) } else toast(`+${m.gain} XP`)
+        loadMe()
       } else if (m.type === 'balance') {
         loadMe()
       } else if (m.type === 'invite') {
@@ -62,10 +71,10 @@ export default function App() {
         loadMe()
       } else if (m.type === 'friends') {
         setTick((t) => t + 1)
-        toast(m.event === 'accepted' || m.event === 'friends' ? `${m.from} тепер ваш друг` : `${m.from} хоче додати вас у друзі`)
+        toast(m.event === 'accepted' || m.event === 'friends' ? t('{0} тепер ваш друг', m.from) : t('{0} хоче додати вас у друзі', m.from))
         loadMe()
       } else if (m.type === 'error') {
-        toast(m.message)
+        toast(m.key ? t(m.key, ...(m.args || []).map((a) => t(a))) : t(m.message))
       }
     }, setOnline)
     return () => { clearTimeout(t); sock.current.close() }
@@ -80,12 +89,12 @@ export default function App() {
   const inviteModal = invite && (
     <div className="overlay">
       <div className="modal">
-        <h3>🃏 Запрошення</h3>
-        <p><b>{invite.from}</b> кличе вас у {invite.variant === 'perevodnoy' ? 'перевідного' : 'підкидного'} на {invite.size}
-          {invite.mode === 'stake' ? `, ставка ${invite.stake}` : ', безкоштовно'}</p>
+        <h3>{t('🃏 Запрошення')}</h3>
+        <p><b>{invite.from}</b>{' ' + t('кличе вас у') + ' '}{invite.variant === 'perevodnoy' ? t('перевідного') : t('підкидного')}{' ' + t('на') + ' '}{invite.size}
+          {invite.mode === 'stake' ? t(', ставка {0}', invite.stake) : t(', безкоштовно')}</p>
         <div className="actions-col">
-          <button className="btn primary" onClick={() => { send({ type: 'join', room: invite.room }); setInvite(null) }}>Приєднатися</button>
-          <button className="btn" onClick={() => setInvite(null)}>Не зараз</button>
+          <button className="btn primary" onClick={() => { send({ type: 'join', room: invite.room }); setInvite(null) }}>{t('Приєднатися')}</button>
+          <button className="btn" onClick={() => setInvite(null)}>{t('Не зараз')}</button>
         </div>
       </div>
     </div>
@@ -97,11 +106,11 @@ export default function App() {
         {err ? (
           <div className="actions-col center">
             <p className="error">{err}</p>
-            <button className="btn" onClick={() => location.reload()}>Спробувати знову</button>
+            <button className="btn" onClick={() => location.reload()}>{t('Спробувати знову')}</button>
           </div>
         ) : <div className="spinner" />}
       </div>
-    )
+    );
   }
 
   if (room && room.room.status !== 'cancelled') {
@@ -117,25 +126,25 @@ export default function App() {
         />
         {err && <div className="toast">{err}</div>}
         {inviteModal}
-        {online !== 'online' && <div className="offline">Перепідключення…</div>}
+        {online !== 'online' && <div className="offline">{t('Перепідключення…')}</div>}
       </>
-    )
+    );
   }
 
   const badge = (me.friend_requests || 0) + (me.unread || 0)
   const tabs = [
-    ['play', '🃏', 'Грати'],
-    ['friends', '👥', 'Друзі', badge],
-    ['shop', '🛍', 'Магазин'],
-    ['withdrawals', '⭐', 'Вивід'],
-    ['profile', '👤', 'Кабінет'],
-    ...(me.is_admin ? [['admin', '🛠', 'Адмін']] : []),
+    ['play', '🃏', t('Грати')],
+    ['friends', '👥', t('Друзі'), badge],
+    ['shop', '🛍', t('Магазин')],
+    ['withdrawals', '⭐', t('Вивід')],
+    ['profile', '👤', t('Кабінет')],
+    ...(me.is_admin ? [['admin', '🛠', t('Адмін')]] : []),
   ]
   return (
     <div className="app">
       {intro}
       <header className="topbar">
-        <div className="logo">♠ Дурак</div>
+        <div className="logo">{t('♠ Дурак') + ' '}<span className="lvl" title={t('Рівень')}>{me.progress?.level}</span></div>
         <div className="balance" onClick={() => setTab('shop')}>
           {me.balance.chips} <Chip />
         </div>
@@ -157,7 +166,7 @@ export default function App() {
       </nav>
       {err && <div className="toast">{err}</div>}
       {inviteModal}
-      {online !== 'online' && <div className="offline">Підключення…</div>}
+      {online !== 'online' && <div className="offline">{t('Підключення…')}</div>}
     </div>
-  )
+  );
 }

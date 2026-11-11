@@ -104,6 +104,11 @@ class TgBot:
                     else "Вітаю в «Дурак онлайн»! Підкидний і перевідний, 2–4 гравці, боти трьох рівнів.")
             await m.answer(text, reply_markup=self.webapp_button(room=room))
 
+        @r.message(Command("id"))
+        async def my_id(m: Message):
+            role = "адміністратор" if is_admin(m) else "гравець"
+            await m.answer(f"Ваш Telegram ID: {m.from_user.id} ({role})")
+
         @r.message(Command("balance"))
         async def balance(m: Message):
             a = acc(m.from_user.id)
@@ -159,6 +164,8 @@ class TgBot:
         @r.message(Command("give"))
         async def give(m: Message, command: CommandObject):
             if not is_admin(m):
+                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
+                               "додайте його в змінну ADMIN_IDS на сервері.")
                 return
             parts = (command.args or "").split(maxsplit=2)
             if len(parts) < 3:
@@ -180,6 +187,8 @@ class TgBot:
         @r.message(Command("bank"))
         async def bank(m: Message, command: CommandObject):
             if not is_admin(m):
+                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
+                               "додайте його в змінну ADMIN_IDS на сервері.")
                 return
             parts = (command.args or "").split(maxsplit=1)
             if len(parts) < 2:
@@ -196,6 +205,8 @@ class TgBot:
         @r.message(Command("refund"))
         async def refund(m: Message, command: CommandObject):
             if not is_admin(m):
+                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
+                               "додайте його в змінну ADMIN_IDS на сервері.")
                 return
             parts = (command.args or "").split()
             if len(parts) != 2:

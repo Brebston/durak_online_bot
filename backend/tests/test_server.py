@@ -245,3 +245,18 @@ def test_restart_releases_holds(tmp_path):
     main.init_state(str(db_file))
     assert main.S.ledger.available("u:9") == 100
     assert main.S.db.one("SELECT status FROM matches WHERE id='m1'")["status"] == "cancelled"
+
+
+def test_valid_signature_passes_even_when_ip_blocked(client):
+    from app.config import settings
+    old = settings.bot_token
+    settings.bot_token = "123:TEST"
+    try:
+        for _ in range(15):  # вичерпуємо ліміт невдалих спроб з цієї IP
+            client.get("/api/me", headers={"Authorization": "tma hash=bad&user=%7B%7D"})
+        r = client.get("/api/me", headers={"Authorization": "tma hash=bad&user=%7B%7D"})
+        assert "Забагато" in r.json()["detail"]
+        good = sign_init_data({"id": 777, "first_name": "Real"}, "123:TEST")
+        assert client.get("/api/me", headers={"Authorization": f"tma {good}"}).status_code == 200
+    finally:
+        settings.bot_token = old

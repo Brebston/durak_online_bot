@@ -137,8 +137,9 @@ app = FastAPI(title="Durak Online", lifespan=lifespan)
 
 # ---------- авторизація ----------
 def authenticate(raw: str, ip: str = "") -> dict:
-    if S.auth_fail.blocked(ip or "?"):
-        raise AuthError("Забагато невдалих спроб, зачекайте")
+    """Валідний підпис Telegram пропускається завжди. Ліміт стосується лише невдалих спроб:
+    за проксі (Railway, Cloudflare) багато гравців можуть мати спільну IP-адресу, тож чужі
+    помилки не повинні блокувати справжніх гравців."""
     raw = raw or ""
     if settings.dev_mode and raw.startswith("dev "):
         # DEV: "dev <id>:<ім'я>" — лише для локальної розробки без Telegram
@@ -149,12 +150,21 @@ def authenticate(raw: str, ip: str = "") -> dict:
     else:
         if raw.startswith("tma "):
             raw = raw[4:]
-        try:
-            user = validate_init_data(raw, settings.bot_token, settings.auth_max_age)
-        except AuthError as e:
-            S.auth_fail.allow(ip or "?")
-            S.db.ex("INSERT INTO auth_log(ts,user_id,ok,note) VALUES(?,?,0,?)", (int(time.time()), None, f"{e} {ip}"))
-            raise
+        if not raw:
+            raise AuthError("Відкрийте гру через бота в Telegram")
+        if S.auth_fail.blocked(ip or "?"):
+            # перевіряємо підпис навіть під блокуванням — справжній гравець пройде
+            try:
+                user = validate_init_data(raw, settings.bot_token, settings.auth_max_age)
+            except AuthError:
+                raise AuthError("Забагато невдалих спроб, зачекайте хвилину")
+        else:
+            try:
+                user = validate_init_data(raw, settings.bot_token, settings.auth_max_age)
+            except AuthError as e:
+                S.auth_fail.allow(ip or "?")
+                S.db.ex("INSERT INTO auth_log(ts,user_id,ok,note) VALUES(?,?,0,?)", (int(time.time()), None, f"{e} {ip}"))
+                raise
     name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x) or str(user["id"])
     u = S.db.upsert_user(int(user["id"]), name, user.get("username"))
     return {"id": u["id"], "name": u["name"], "username": u["username"], "banned": u["banned"]}

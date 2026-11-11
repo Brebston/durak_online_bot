@@ -42,7 +42,11 @@ export class GameSocket {
       this.onStatus?.('online')
       this.queue.splice(0).forEach((m) => this.ws.send(m))
     }
-    this.ws.onmessage = (e) => this.onMessage(JSON.parse(e.data))
+    this.ws.onmessage = (e) => {
+      const m = JSON.parse(e.data)
+      if (m.fatal) this.closed = true // помилка авторизації — не перепідключаємось безкінечно
+      this.onMessage(m)
+    }
     this.ws.onclose = () => {
       this.onStatus?.('offline')
       if (this.closed) return

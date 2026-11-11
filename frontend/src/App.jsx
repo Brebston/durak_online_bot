@@ -89,7 +89,16 @@ export default function App() {
   )
 
   if (!me) {
-    return <div className="center-screen">{err ? <p className="error">{err}</p> : <div className="spinner" />}</div>
+    return (
+      <div className="center-screen">
+        {err ? (
+          <div className="actions-col center">
+            <p className="error">{err}</p>
+            <button className="btn" onClick={() => location.reload()}>Спробувати знову</button>
+          </div>
+        ) : <div className="spinner" />}
+      </div>
+    )
   }
 
   if (room && room.room.status !== 'cancelled') {

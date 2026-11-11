@@ -1,0 +1,11 @@
+node_modules/
+frontend/dist/
+data/
+.env
+__pycache__/
+*.db
+.idea/
+.DS_Store
+.venv/
+.ruff_cache/
+.pytest_cache/

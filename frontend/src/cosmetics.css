@@ -1,0 +1,71 @@
+/* ================= Сорочки карт (оригінальні CSS-дизайни) ================= */
+.cb-back_classic { background: repeating-linear-gradient(45deg, #8a1f2b 0 4px, #a8303d 4px 8px); }
+.cb-back_navy { background: repeating-linear-gradient(-45deg, #173a6b 0 5px, #1f4d8c 5px 10px); border-color: #e6eefc !important; }
+.cb-back_carbon {
+  background:
+    linear-gradient(27deg, #151515 5px, transparent 5px) 0 5px,
+    linear-gradient(207deg, #151515 5px, transparent 5px) 10px 0,
+    linear-gradient(27deg, #222 5px, transparent 5px) 0 10px,
+    linear-gradient(207deg, #222 5px, transparent 5px) 10px 5px,
+    linear-gradient(90deg, #1b1b1b 10px, transparent 10px),
+    linear-gradient(#1d1d1d 25%, #1a1a1a 25%, #1a1a1a 50%, transparent 50%, transparent 75%, #242424 75%, #242424);
+  background-color: #131313; background-size: 20px 20px; border-color: #9aa !important;
+}
+.cb-back_emerald {
+  background: linear-gradient(135deg, #0d5c45 25%, transparent 25%) -6px 0 / 12px 12px,
+    linear-gradient(225deg, #0d5c45 25%, transparent 25%) -6px 0 / 12px 12px,
+    linear-gradient(315deg, #0d5c45 25%, transparent 25%) 0 0 / 12px 12px,
+    linear-gradient(45deg, #0d5c45 25%, #1a8a68 25%) 0 0 / 12px 12px;
+}
+.cb-back_sunflower { background: radial-gradient(circle at 50% 50%, #5b3a12 0 18%, #f5c518 19% 38%, #2f6fd6 39%); background-size: 16px 16px; }
+.cb-back_blackgold { background: repeating-linear-gradient(60deg, #111 0 6px, #1c1c1c 6px 12px); border-color: #d4af37 !important; box-shadow: inset 0 0 0 2px #d4af37; }
+.cb-back_neon { background: linear-gradient(135deg, #12002b, #2a0057); border-color: #00f0ff !important; box-shadow: 0 0 6px #00f0ff, inset 0 0 6px #ff00d4; }
+.cb-back_vyshyvanka {
+  background:
+    linear-gradient(45deg, transparent 40%, #c8102e 40% 60%, transparent 60%) 0 0 / 12px 12px,
+    linear-gradient(-45deg, transparent 40%, #111 40% 60%, transparent 60%) 0 0 / 12px 12px,
+    #f4efe4;
+  border-color: #c8102e !important;
+}
+.cb-back_galaxy { background: radial-gradient(circle at 30% 30%, #fff 0 1px, transparent 2px) 0 0 / 9px 11px, radial-gradient(circle at 70% 60%, #cde 0 1px, transparent 2px) 0 0 / 13px 7px, radial-gradient(ellipse at 40% 40%, #6a2c91, #1a0b3d 60%, #050314); }
+.cb-back_dragon { background: radial-gradient(circle at 50% 0, transparent 5px, #0f6b3a 6px 7px, #138a4a 8px) 0 0 / 12px 8px; background-color: #0b4d2a; border-color: #ffcc33 !important; }
+
+/* ================= Столи ================= */
+.tb-table_green { background: radial-gradient(ellipse at center, #13573f 0%, #0f4733 70%, #0a3022 100%) !important; }
+.tb-table_blue { background: radial-gradient(ellipse at center, #1c4f8a 0%, #143a66 70%, #0c2645 100%) !important; }
+.tb-table_burgundy { background: radial-gradient(ellipse at center, #7a1f33 0%, #5c1626 70%, #3d0e19 100%) !important; }
+.tb-table_oak { background: repeating-linear-gradient(90deg, rgba(0,0,0,.06) 0 2px, transparent 2px 26px), linear-gradient(180deg, #8a5a32, #6b4223 60%, #4f2f17) !important; }
+.tb-table_sunset { background: linear-gradient(180deg, #2b1055 0%, #7b2e6b 45%, #d9644f 80%, #f2a25c 100%) !important; }
+.tb-table_night { background: linear-gradient(180deg, #050816 0%, #0c1530 60%, #1a1240 100%) !important; }
+.tb-table_night .felt { background: radial-gradient(circle at 20% 80%, rgba(255,210,90,.15) 0 2px, transparent 3px) 0 0 / 23px 19px, radial-gradient(circle at 60% 90%, rgba(120,200,255,.12) 0 2px, transparent 3px) 0 0 / 31px 17px; }
+.tb-table_marble { background: linear-gradient(115deg, rgba(255,255,255,.08) 10%, transparent 30%), linear-gradient(35deg, transparent 40%, rgba(0,0,0,.12) 55%, transparent 70%), linear-gradient(160deg, #3e4a52, #2a3238 60%, #1c2226) !important; }
+.tb-table_space { background: radial-gradient(circle, #fff 0 1px, transparent 1.5px) 0 0 / 40px 37px, radial-gradient(circle, #9cf 0 1px, transparent 1.5px) 13px 7px / 53px 47px, radial-gradient(ellipse at 70% 30%, #3b1d6e 0%, #120b2e 50%, #04030c 100%) !important; }
+
+/* превʼю столів у магазині */
+.table-preview { width: 100%; height: 64px; border-radius: 10px; }
+
+/* ================= Заставки ================= */
+.intro { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #06150f; animation: introOut .4s ease 1.5s forwards; pointer-events: none; }
+@keyframes introOut { to { opacity: 0; visibility: hidden; } }
+.intro .logo-big { font-size: 34px; font-weight: 900; letter-spacing: .02em; color: #f2c14e; animation: pop .6s cubic-bezier(.2,1.6,.4,1) both; }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } }
+.in-intro_fan .fan { position: absolute; top: 50%; left: 50%; }
+.in-intro_fan .fan .pcard { position: absolute; left: -28px; top: -110px; transform-origin: 50% 160%; animation: fanOut .7s ease both; }
+@keyframes fanOut { from { transform: rotate(0deg); } }
+.in-intro_lightning { background: #050510; animation: flash .5s steps(2) 3, introOut .4s ease 1.5s forwards; }
+@keyframes flash { 50% { background: #e8f0ff; } }
+.in-intro_lightning .logo-big { color: #9cf; text-shadow: 0 0 18px #6af; }
+.in-intro_ace .ace { width: 110px; height: 156px; border-radius: 12px; background: linear-gradient(135deg, #fff6d5, #f2c14e 50%, #b8860b); display: grid; place-items: center; font-size: 70px; color: #3a2a00; box-shadow: 0 0 40px rgba(242,193,78,.7); animation: spinIn 1s cubic-bezier(.2,.9,.3,1) both; }
+@keyframes spinIn { from { transform: rotateY(540deg) scale(.3); opacity: 0; } }
+
+/* ================= Анімації перемоги ================= */
+.victory { position: fixed; inset: 0; pointer-events: none; z-index: 45; overflow: hidden; }
+.victory i { position: absolute; top: -20px; display: block; animation: fall linear forwards; }
+@keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+.vc-victory_stars i { color: #f2c14e; font-style: normal; font-size: 18px; }
+.vc-victory_confetti i { width: 8px; height: 14px; border-radius: 2px; }
+.vc-victory_goldrain i { width: 6px; height: 6px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #fff6c2, #d4a017); box-shadow: 0 0 6px #f2c14e; }
+.vc-victory_fireworks i { top: auto; width: 6px; height: 6px; border-radius: 50%; animation: burst 1.2s ease-out forwards; }
+@keyframes burst { 0% { transform: translate(0, 0) scale(1); opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(.3); opacity: 0; } }
+.vc-victory_crown .crown { position: absolute; left: 50%; top: 18%; font-size: 90px; transform: translateX(-50%); animation: crownDrop 1.2s cubic-bezier(.3,1.5,.5,1) both; filter: drop-shadow(0 0 20px #f2c14e); }
+@keyframes crownDrop { from { transform: translate(-50%, -200px) rotate(-30deg); opacity: 0; } }

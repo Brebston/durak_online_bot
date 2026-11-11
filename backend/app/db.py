@@ -167,6 +167,8 @@ class DB:
         for name, ddl in (
             ("cosmetics", "TEXT NOT NULL DEFAULT '{}'"),
             ("discoverable", "INTEGER NOT NULL DEFAULT 1"),
+            ("xp", "INTEGER NOT NULL DEFAULT 0"),
+            ("lang", "TEXT"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")

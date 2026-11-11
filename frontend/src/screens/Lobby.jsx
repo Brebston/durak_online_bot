@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { t } from '../i18n.js'
 
 function Seg({ value, options, onChange }) {
   return (
@@ -19,6 +20,7 @@ export default function Lobby({ me, send }) {
   const [deck, setDeck] = useState(36)
   const [stake, setStake] = useState(modes.stakes[0] || 10)
   const [turn, setTurn] = useState(30)
+  const [cheating, setCheating] = useState(false)
   const [view, setView] = useState('quick') // quick | rooms
   const [rooms, setRooms] = useState(null)
   const [roomName, setRoomName] = useState('')
@@ -34,36 +36,36 @@ export default function Lobby({ me, send }) {
 
   const fee = Math.floor((stake * modes.commission_percent) / 100)
   const share = Math.floor((stake - fee) / Math.max(1, size - 1))
-  const rules = { variant, deck_size: deck, turn_seconds: turn }
+  const rules = { variant, deck_size: deck, turn_seconds: turn, cheating }
   const params = { mode, size, stake: mode === 'stake' ? stake : 0, rules }
   const tooFew = deck === 36 && size * 6 > 36
   const noFree = mode === 'free' && me.free_left === 0
   const noMoney = mode === 'stake' && me.available.chips < stake
   const disabled = tooFew || noFree || noMoney || me.banned
 
-  const VARIANT = { podkidnoy: 'Підкидний', perevodnoy: 'Перевідний' }
+  const VARIANT = { podkidnoy: t('Підкидний'), perevodnoy: t('Перевідний') }
   return (
     <div className="lobby">
       <div className="seg big">
-        <button className={view === 'quick' ? 'on' : ''} onClick={() => setView('quick')}>⚡ Швидка гра</button>
-        <button className={view === 'rooms' ? 'on' : ''} onClick={() => setView('rooms')}>🚪 Кімнати</button>
+        <button className={view === 'quick' ? 'on' : ''} onClick={() => setView('quick')}>{t('⚡ Швидка гра')}</button>
+        <button className={view === 'rooms' ? 'on' : ''} onClick={() => setView('rooms')}>{t('🚪 Кімнати')}</button>
       </div>
 
       {view === 'rooms' && (
         <section className="card-box">
-          <h3>Відкриті кімнати</h3>
+          <h3>{t('Відкриті кімнати')}</h3>
           {!rooms && <div className="spinner" />}
-          {rooms && rooms.length === 0 && <p className="hint">Поки порожньо. Створіть свою кімнату нижче 👇</p>}
+          {rooms && rooms.length === 0 && <p className="hint">{t('Поки порожньо. Створіть свою кімнату нижче 👇')}</p>}
           <ul className="list">
             {(rooms || []).map((r) => (
               <li key={r.id}>
                 <div>
-                  <b>{r.custom ? r.name : 'Швидка гра'}</b>
-                  <small>{VARIANT[r.variant]} · {r.deck} карт · {r.turn}с · {r.mode === 'stake' ? `ставка ${r.stake}` : 'безкоштовно'}</small>
+                  <b>{r.custom ? r.name : t('Швидка гра')}</b>
+                  <small>{VARIANT[r.variant]}{r.cheating ? t(' · 🃏 Шулер') : ''} · {r.deck}{' ' + t('карт ·') + ' '}{r.turn}{t('с ·') + ' '}{r.mode === 'stake' ? t('ставка {0}', r.stake) : t('безкоштовно')}</small>
                   <small>👤 {r.players}/{r.size}{r.host ? ` · ${r.host}` : ''}</small>
                 </div>
                 <button className="btn small primary" disabled={r.mode === 'stake' && me.available.chips < r.stake}
-                  onClick={() => send({ type: 'join', room: r.id })}>Сісти</button>
+                  onClick={() => send({ type: 'join', room: r.id })}>{t('Сісти')}</button>
               </li>
             ))}
           </ul>
@@ -71,65 +73,69 @@ export default function Lobby({ me, send }) {
       )}
 
       <section className="card-box">
-        <h3>Режим</h3>
+        <h3>{t('Режим')}</h3>
         <Seg value={mode} onChange={setMode} options={[
-          ...(modes.free ? [['free', 'Безкоштовно']] : []),
-          ...(modes.stake ? [['stake', 'На фішки']] : []),
+          ...(modes.free ? [['free', t('Безкоштовно')]] : []),
+          ...(modes.stake ? [['stake', t('На фішки')]] : []),
         ]} />
         {mode === 'free' && me.free_left !== null && (
-          <p className="hint">Безкоштовних ігор сьогодні: {me.free_left}</p>
+          <p className="hint">{t('Безкоштовних ігор сьогодні:') + ' '}{me.free_left}</p>
         )}
         {mode === 'stake' && (
           <>
-            <h4>Ставка</h4>
+            <h4>{t('Ставка')}</h4>
             <Seg value={stake} onChange={setStake} options={modes.stakes.map((s) => [s, `${s}`])} />
           </>
         )}
       </section>
 
       <section className="card-box">
-        <h3>Правила</h3>
-        <Seg value={variant} onChange={setVariant} options={[['podkidnoy', 'Підкидний'], ['perevodnoy', 'Перевідний']]} />
-        <h4>Гравців</h4>
+        <h3>{t('Правила')}</h3>
+        <Seg value={variant} onChange={setVariant} options={[['podkidnoy', t('Підкидний')], ['perevodnoy', t('Перевідний')]]} />
+        <h4>{t('Гравців')}</h4>
         <Seg value={size} onChange={setSize} options={[[2, '2'], [3, '3'], [4, '4']]} />
-        <h4>Колода</h4>
-        <Seg value={deck} onChange={setDeck} options={[[36, '36 карт'], [52, '52 карти']]} />
-        <h4>Час на хід</h4>
-        <Seg value={turn} onChange={setTurn} options={[[20, '20 с'], [30, '30 с'], [60, '60 с']]} />
+        <h4>{t('Колода')}</h4>
+        <Seg value={deck} onChange={setDeck} options={[[36, t('36 карт')], [52, t('52 карти')]]} />
+        <label className="toggle cheat-toggle">
+          <input type="checkbox" checked={cheating} onChange={(e) => setCheating(e.target.checked)} />
+          {' ' + t('🃏 Режим «Шулер» — можна мухлювати')}
+        </label>
+        {cheating && <p className="hint">{t('Можна відбиватися будь-якою картою й підкидати будь-що. Помітили мухлювання — торкніться карти, і вона повернеться мухлярові. Боти теж мухлюють і ловлять.')}</p>}
+        <h4>{t('Час на хід')}</h4>
+        <Seg value={turn} onChange={setTurn} options={[[20, t('20 с')], [30, t('30 с')], [60, t('60 с')]]} />
       </section>
 
       {mode === 'stake' && (
         <section className="card-box terms">
-          <div><span>Ставка</span><b>{stake}</b></div>
-          <div><span>Комісія</span><b>{modes.commission_percent}% ({fee})</b></div>
-          <div><span>Можливий виграш</span><b className="plus">+{share}</b></div>
-          <div><span>Можлива втрата</span><b className="minus">−{stake}</b></div>
-          <p className="hint">«Дурень» віддає ставку, решта ділять її порівну. Нічия чи скасування — ставка повертається.
-            Ставка резервується, поки йде пошук і матч.</p>
+          <div><span>{t('Ставка')}</span><b>{stake}</b></div>
+          <div><span>{t('Комісія')}</span><b>{modes.commission_percent}% ({fee})</b></div>
+          <div><span>{t('Можливий виграш')}</span><b className="plus">+{share}</b></div>
+          <div><span>{t('Можлива втрата')}</span><b className="minus">−{stake}</b></div>
+          <p className="hint">{t(
+            '«Дурень» віддає ставку, решта ділять її порівну. Нічия чи скасування — ставка повертається. Ставка резервується, поки йде пошук і матч.'
+          )}</p>
         </section>
       )}
 
-      {noMoney && <p className="error">Недостатньо фішок — поповніть у вкладці «Фішки».</p>}
-      {noFree && <p className="error">Безкоштовна гра на сьогодні вичерпана.</p>}
+      {noMoney && <p className="error">{t('Недостатньо фішок — поповніть у вкладці «Фішки».')}</p>}
+      {noFree && <p className="error">{t('Безкоштовна гра на сьогодні вичерпана.')}</p>}
 
       {view === 'quick' ? (
         <div className="actions-col">
-          <button className="btn primary big" disabled={disabled} onClick={() => send({ type: 'find', ...params })}>
-            Знайти гру
-          </button>
-          <p className="hint center">Шукаємо суперників з такими ж налаштуваннями. Якщо онлайн малий, суперників
-            підбере система — гра почнеться за кілька секунд.</p>
+          <button className="btn primary big" disabled={disabled} onClick={() => send({ type: 'find', ...params })}>{t('Знайти гру')}</button>
+          <p className="hint center">{t(
+            'Шукаємо суперників з такими ж налаштуваннями. Якщо онлайн малий, суперників підбере система — гра почнеться за кілька секунд.'
+          )}</p>
         </div>
       ) : (
         <section className="card-box">
-          <h3>Створити кімнату</h3>
-          <input placeholder="Назва кімнати" maxLength={40} value={roomName} onChange={(e) => setRoomName(e.target.value)} />
-          <label className="toggle"><input type="checkbox" checked={listed} onChange={(e) => setListed(e.target.checked)} />
-            Показувати в списку кімнат (інакше — лише за запрошенням)</label>
+          <h3>{t('Створити кімнату')}</h3>
+          <input placeholder={t('Назва кімнати')} maxLength={40} value={roomName} onChange={(e) => setRoomName(e.target.value)} />
+          <label className="toggle"><input type="checkbox" checked={listed} onChange={(e) => setListed(e.target.checked)} />{t('Показувати в списку кімнат (інакше — лише за запрошенням)')}</label>
           <button className="btn primary" disabled={disabled}
-            onClick={() => send({ type: 'create', ...params, name: roomName, listed })}>Створити</button>
+            onClick={() => send({ type: 'create', ...params, name: roomName, listed })}>{t('Створити')}</button>
         </section>
       )}
     </div>
-  )
+  );
 }

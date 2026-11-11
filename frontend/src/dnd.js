@@ -8,11 +8,12 @@
  * @returns {object|null}   дія для відправки або null (карта повертається в руку)
  */
 export function resolveDrop(actions, card, drop) {
-  const opts = actions.filter((a) => a.card === card)
+  const opts = actions.filter((a) => a.card === card && a.type !== 'catch')
   if (!opts.length || !drop.onTable) return null
-  const defends = opts.filter((a) => a.type === 'defend')
+  // чесні варіанти — першими (у режимі «Шулер» є ще й мухлювання)
+  const defends = opts.filter((a) => a.type === 'defend').sort((a, b) => Boolean(a.cheat) - Boolean(b.cheat))
   const transfer = opts.find((a) => a.type === 'transfer')
-  const attack = opts.find((a) => a.type === 'attack')
+  const attack = opts.find((a) => a.type === 'attack' && !a.cheat) || opts.find((a) => a.type === 'attack')
 
   // кинули прямо на карту суперника — відбиваємо саме її
   if (drop.overPair !== null && drop.overPair !== undefined) {
@@ -23,9 +24,11 @@ export function resolveDrop(actions, card, drop) {
   // кинули на вільне місце: переводимо, якщо можна
   if (transfer && (drop.overPair === null || drop.overPair === undefined)) return transfer
   // інакше — відбиваємо найближчу карту, яку ця карта може побити
-  for (const i of drop.nearest || []) {
-    const d = defends.find((a) => a.target === i)
-    if (d) return d
+  for (const honest of [true, false]) {
+    for (const i of drop.nearest || []) {
+      const d = defends.find((a) => a.target === i && !a.cheat === honest)
+      if (d) return d
+    }
   }
   return defends[0] || transfer || null
 }

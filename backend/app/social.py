@@ -31,7 +31,10 @@ class Social:
         return u
 
     def public_user(self, u: dict, online: set[int]) -> dict:
-        return {"id": u["id"], "name": u["name"], "username": u["username"], "online": u["id"] in online}
+        from .levels import level_of
+
+        return {"id": u["id"], "name": u["name"], "username": u["username"], "online": u["id"] in online,
+                "lvl": level_of(int(u.get("xp") or 0))}
 
     def search(self, uid: int, q: str, online: set[int]) -> list[dict]:
         q = (q or "").strip().lstrip("@")
@@ -72,6 +75,8 @@ class Social:
         if self.db.one("SELECT 1 FROM friend_requests WHERE from_id=? AND to_id=?", (to, uid)):
             self._make_friends(uid, to)
             return "friends"
+        if self.db.one("SELECT COUNT(*) n FROM friend_requests WHERE from_id=?", (uid,))["n"] >= 50:
+            raise SocialError("Забагато непідтверджених заявок")
         self.db.ex("INSERT OR IGNORE INTO friend_requests(from_id,to_id,created_at) VALUES(?,?,?)",
                    (uid, to, int(time.time())))
         return "requested"

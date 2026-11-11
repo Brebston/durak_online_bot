@@ -15,10 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import AuthError, validate_init_data
+from .bot_i18n import bt, pick_lang
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
 from .ledger import BANK, FEE, Ledger, LedgerError, acc
+from .levels import progress
 from .rooms import RoomError, RoomManager
 from .shop import CATALOG, Shop, ShopError
 from .social import Social, SocialError
@@ -128,12 +130,39 @@ async def lifespan(app: FastAPI):
         log.info("Bot @%s started", S.tg.username)
     else:
         log.warning("BOT_TOKEN не задано — бот не запущено (лише DEV_MODE)")
+    if settings.dev_mode and settings.bot_token:
+        log.warning("DEV_MODE=1 ігнорується, бо задано BOT_TOKEN: вхід лише через Telegram")
+    cleanup = asyncio.create_task(S.rooms.cleanup_loop())
     yield
+    cleanup.cancel()
     if task:
         task.cancel()
 
 
-app = FastAPI(title="Durak Online", lifespan=lifespan)
+app = FastAPI(title="Durak Online", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def dev_auth_allowed() -> bool:
+    """DEV-вхід без Telegram працює лише без BOT_TOKEN — випадково увімкнений DEV_MODE на бойовому
+    сервері не дасть увійти під чужим ID."""
+    return settings.dev_mode and not settings.bot_token
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    # Mini App відкривається всередині Telegram (у т.ч. web.telegram.org в iframe) — дозволяємо лише його
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org")
+    if request.url.path.startswith("/api/"):
+        h.setdefault("Cache-Control", "no-store")
+    return resp
+
+
+MAX_WS_MESSAGE = 4096
 
 
 # ---------- авторизація ----------
@@ -142,7 +171,7 @@ def authenticate(raw: str, ip: str = "") -> dict:
     за проксі (Railway, Cloudflare) багато гравців можуть мати спільну IP-адресу, тож чужі
     помилки не повинні блокувати справжніх гравців."""
     raw = raw or ""
-    if settings.dev_mode and raw.startswith("dev "):
+    if dev_auth_allowed() and raw.startswith("dev "):
         # DEV: "dev <id>:<ім'я>" — лише для локальної розробки без Telegram
         from urllib.parse import unquote
 
@@ -225,6 +254,8 @@ async def me(user: dict = Depends(current_user)):
         "stats": user_stats(user["id"]),
         "settings": {"sound": bool(u["sound"]), "notify": bool(u["notify"]),
                      "discoverable": bool(u["discoverable"])},
+        "progress": progress(int(u["xp"] or 0)),
+        "lang": u["lang"],
         "cosmetics": S.shop.equipped(user["id"]),
         "emojis": S.shop.emojis(user["id"]),
         "friend_requests": S.db.one("SELECT COUNT(*) n FROM friend_requests WHERE to_id=?", (user["id"],))["n"],
@@ -238,7 +269,7 @@ async def me(user: dict = Depends(current_user)):
             "stars_per_chips": settings.stars_to_chips,
             "eur_per_star": settings.withdrawal_eur_per_star if settings.withdrawal_eur_per_star > 0 else None,
         },
-        "shop": {"rate": settings.stars_to_chips, "packs": settings.star_packs, "enabled": bool(S.tg) or settings.dev_mode},
+        "shop": {"rate": settings.stars_to_chips, "packs": settings.star_packs, "enabled": bool(S.tg) or dev_auth_allowed()},
         "room": room.id if room else None,
     }
 
@@ -253,6 +284,18 @@ class SettingsIn(BaseModel):
 async def save_settings(body: SettingsIn, user: dict = Depends(current_user)):
     S.db.ex("UPDATE users SET sound=?, notify=?, discoverable=? WHERE id=?",
             (int(body.sound), int(body.notify), int(body.discoverable), user["id"]))
+    return {"ok": True}
+
+
+class LangIn(BaseModel):
+    lang: str
+
+
+@app.post("/api/lang")
+async def save_lang(body: LangIn, user: dict = Depends(current_user)):
+    if body.lang not in ("uk", "en", "pl", "ru"):
+        raise HTTPException(400, "Невідома мова")
+    S.db.ex("UPDATE users SET lang=? WHERE id=?", (body.lang, user["id"]))
     return {"ok": True}
 
 
@@ -339,6 +382,55 @@ class MessageIn(BaseModel):
     text: str
 
 
+class ChipTransferIn(BaseModel):
+    to: int
+    amount: int
+    request_id: str
+
+
+@app.post("/api/transfers")
+async def transfer_chips(body: ChipTransferIn, user: dict = Depends(current_user)):
+    """Transfer chips to a friend and notify them through Telegram."""
+    uid, recipient_id = user["id"], body.to
+    if recipient_id == uid:
+        raise HTTPException(400, "Не можна переказати фішки собі")
+    if body.amount <= 0 or body.amount > 1_000_000_000:
+        raise HTTPException(400, "Некоректна сума переказу")
+    if len(body.request_id) > 80 or not body.request_id.strip():
+        raise HTTPException(400, "Некоректний ID запиту")
+    if not S.social.are_friends(uid, recipient_id):
+        raise HTTPException(403, "Переказувати фішки можна лише друзям")
+    recipient = S.db.user(recipient_id)
+    if not recipient:
+        raise HTTPException(404, "Гравця не знайдено")
+    transfer_id = f"{uid}:{body.request_id}"
+    try:
+        inserted = S.ledger.transfer(
+            acc(uid), acc(recipient_id), body.amount, "player_transfer",
+            ref=transfer_id, reason=f"{uid} → {recipient_id}",
+            idem=f"player-transfer:{transfer_id}",
+        )
+    except LedgerError as e:
+        raise HTTPException(400, str(e))
+    if not inserted:
+        raise HTTPException(409, "Цей переказ уже оброблено")
+
+    await send_to_user(uid, {"type": "balance"})
+    await send_to_user(recipient_id, {"type": "balance"})
+    if S.tg:
+        lang = pick_lang(recipient.get("lang"), None)
+        try:
+            await S.tg.bot.send_message(
+                recipient_id,
+                bt(lang, "chips_received", name=user["name"], amount=body.amount),
+                reply_markup=S.tg.webapp_button(bt(lang, "play")),
+            )
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify %s about chip transfer", recipient_id)
+    return {"ok": True, "to": recipient_id, "amount": body.amount,
+            "balance": S.ledger.balance(acc(uid))}
+
+
 @app.post("/api/messages")
 async def message_send(body: MessageIn, user: dict = Depends(current_user)):
     if not S.ws_limit.allow(f"dm{user['id']}"):
@@ -392,7 +484,7 @@ async def invoice(body: InvoiceIn, user: dict = Depends(current_user)):
         raise HTTPException(403, "Обліковий запис заблоковано")
     if S.tg:
         return {"link": await S.tg.create_invoice(user["id"], body.stars)}
-    if settings.dev_mode:
+    if dev_auth_allowed():
         chips = body.stars * settings.stars_to_chips
         S.ledger.post(acc(user["id"]), chips, "deposit", reason=f"DEV {body.stars} Stars", idem=f"dev:{time.time_ns()}")
         return {"link": None, "dev_credited": chips}
@@ -409,6 +501,8 @@ async def support(body: TicketIn, user: dict = Depends(current_user)):
     text = body.text.strip()[:2000]
     if len(text) < 5:
         raise HTTPException(400, "Опишіть проблему детальніше")
+    if S.db.one("SELECT COUNT(*) n FROM tickets WHERE user_id=? AND status='open'", (user["id"],))["n"] >= 5:
+        raise HTTPException(429, "У вас уже 5 відкритих звернень — дочекайтеся відповіді")
     tid = S.db.ex("INSERT INTO tickets(user_id,text,match_id,created_at) VALUES(?,?,?,?)",
                   (user["id"], text, body.match_id, int(time.time())))
     return {"id": tid}
@@ -642,6 +736,8 @@ async def admin_adjust(body: AdjustIn, admin: dict = Depends(admin_user)):
     if body.user_id is not None and not S.db.user(body.user_id):
         raise HTTPException(404, "Гравця не знайдено")
     try:
+        if not 0 < abs(body.amount) <= 1_000_000_000:
+            raise LedgerError("Сума поза допустимими межами")
         S.ledger.admin_adjust(admin["id"], account, body.amount, body.reason)
     except LedgerError as e:
         raise HTTPException(400, str(e))
@@ -780,7 +876,10 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     ip = ws.client.host if ws.client else ""
     try:
-        first = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=15))
+        raw_first = await asyncio.wait_for(ws.receive_text(), timeout=15)
+        if len(raw_first) > MAX_WS_MESSAGE:
+            raise AuthError("Завеликий запит")
+        first = json.loads(raw_first)
         user = authenticate(first.get("auth", ""), ip)
     except Exception as e:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": f"Авторизація: {e}", "fatal": True}))
@@ -795,7 +894,15 @@ async def ws_endpoint(ws: WebSocket):
         await ws.send_text(json.dumps(S.rooms.payload(room, uid), ensure_ascii=False))
     try:
         while True:
-            msg = json.loads(await ws.receive_text())
+            raw_msg = await ws.receive_text()
+            if len(raw_msg) > MAX_WS_MESSAGE:
+                continue  # завеликі повідомлення ігноруємо
+            try:
+                msg = json.loads(raw_msg)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
             if not S.ws_limit.allow(f"u{uid}"):
                 await ws.send_text(json.dumps({"type": "error", "message": "Забагато дій, зачекайте"}))
                 continue
@@ -807,7 +914,8 @@ async def ws_endpoint(ws: WebSocket):
                     if r:
                         await ws.send_text(json.dumps(S.rooms.payload(r, uid), ensure_ascii=False))
                 else:
-                    await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+                    await ws.send_text(json.dumps({"type": "error", "message": str(e), "key": e.key, "args": e.args_},
+                                                  ensure_ascii=False))
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001

@@ -34,15 +34,30 @@ class Rules:
     throw_in: str = "all"           # all | neighbors
     first_move: str = "lowest_trump"  # lowest_trump | random
     turn_seconds: int = 30
+    cheating: bool = False          # режим «Шулер»: можна мухлювати, суперники можуть спіймати
+
+    _INT_FIELDS = ("deck_size", "hand_size", "max_table", "first_bout_limit", "turn_seconds")
 
     @classmethod
     def from_dict(cls, d: dict | None) -> Rules:
         r = cls()
         if not d:
             return r
+        if not isinstance(d, dict):
+            raise ValueError("rules")
         for k, v in d.items():
-            if hasattr(r, k):
-                setattr(r, k, v)
+            if k.startswith("_") or not hasattr(r, k):
+                continue
+            # жорстка перевірка типів: клієнт не може підсунути рядок, float чи обʼєкт
+            if k in cls._INT_FIELDS:
+                if isinstance(v, bool) or not isinstance(v, int):
+                    raise ValueError(k)
+            elif k == "cheating":
+                if not isinstance(v, bool):
+                    raise ValueError(k)
+            elif not isinstance(v, str):
+                raise ValueError(k)
+            setattr(r, k, v)
         r.validate()
         return r
 
@@ -51,13 +66,17 @@ class Rules:
             raise ValueError("variant")
         if self.deck_size not in (24, 36, 52):
             raise ValueError("deck_size")
-        if not 4 <= int(self.hand_size) <= 8:
+        if not 4 <= self.hand_size <= 8:
             raise ValueError("hand_size")
+        if not 1 <= self.max_table <= 6:
+            raise ValueError("max_table")
+        if not 0 <= self.first_bout_limit <= 6:
+            raise ValueError("first_bout_limit")
         if self.throw_in not in ("all", "neighbors"):
             raise ValueError("throw_in")
         if self.first_move not in ("lowest_trump", "random"):
             raise ValueError("first_move")
-        if not 10 <= int(self.turn_seconds) <= 120:
+        if not 10 <= self.turn_seconds <= 120:
             raise ValueError("turn_seconds")
 
     def to_dict(self) -> dict:
@@ -105,6 +124,11 @@ class Game:
         self.loser: str | None = None
         self.draw = False
         self.surrendered: str | None = None
+        # режим «Шулер» (приховано від гравців): хто що поклав і які карти — мухлювання
+        self.owner: dict[str, str] = {}
+        self.cheats: dict[str, str] = {}
+        self.catch_fail: set[str] = set()
+        self.last_bout: dict | None = None   # стіл у момент завершення відбою (для анімації)
         self.attacker = self._first_attacker()
         self.defender = self._next_active(self.attacker)
 
@@ -171,6 +195,13 @@ class Game:
         return (len(self.table) < self.bout_limit()
                 and len(self.unbeaten()) < len(self.hands[self.defender]))
 
+    def _can_throw_any(self, p: str) -> bool:
+        """Чи може гравець щось підкинути (у режимі «Шулер» — будь-яку карту)."""
+        if self.rules.cheating:
+            return (p != self.defender and self.is_active(p) and bool(self.table) and bool(self.hands[p])
+                    and p in self.attackers() and self._can_add_count())
+        return bool(self._throwable(p))
+
     def _throwable(self, p: str) -> list[str]:
         if p == self.defender or not self.is_active(p) or not self.table:
             return []
@@ -183,7 +214,7 @@ class Game:
     def legal_actions(self, p: str) -> list[dict]:
         if self.status != "playing" or not self.is_active(p):
             return []
-        acts: list[dict] = []
+        acts: list[dict] = self._catch_actions(p)
         if p == self.defender:
             if not self.taking:
                 for i in self.unbeaten():
@@ -191,6 +222,8 @@ class Game:
                     for c in self.hands[p]:
                         if self.beats(a, c):
                             acts.append({"type": "defend", "card": c, "target": i})
+                        elif self.rules.cheating:
+                            acts.append({"type": "defend", "card": c, "target": i, "cheat": True})
                 if self._transfer_ok_base():
                     rank = rank_of(self.table[0][0])
                     for c in self.hands[p]:
@@ -200,15 +233,25 @@ class Game:
                     acts.append({"type": "take"})
             return acts
         if p not in self.attackers():
-            return []
+            return acts
         if not self.table:
             if p == self.attacker:
-                acts = [{"type": "attack", "card": c} for c in self.hands[p]]
+                acts += [{"type": "attack", "card": c} for c in self.hands[p]]
             return acts
-        acts = [{"type": "attack", "card": c} for c in self._throwable(p)]
+        legal = self._throwable(p)
+        acts += [{"type": "attack", "card": c} for c in legal]
+        if self.rules.cheating and self._can_add_count():
+            acts += [{"type": "attack", "card": c, "cheat": True} for c in self.hands[p] if c not in legal]
         if p not in self.passed and (self.taking or not self.unbeaten()):
             acts.append({"type": "pass"})
         return acts
+
+    def _catch_actions(self, p: str) -> list[dict]:
+        """«Спіймати» можна будь-яку чужу карту на столі (раз за відбій можна помилитися)."""
+        if not self.rules.cheating or p in self.catch_fail or not self.is_active(p):
+            return []
+        return [{"type": "catch", "card": c} for pair in self.table for c in pair
+                if c and self.owner.get(c) != p]
 
     def _transfer_ok_base(self) -> bool:
         if self.rules.variant != "perevodnoy" or self.taking or not self.table:
@@ -231,9 +274,22 @@ class Game:
         t = action.get("type")
         legal = self.legal_actions(p)
         key = {k: action.get(k) for k in ("type", "card", "target") if action.get(k) is not None}
-        if not any(all(la.get(k) == v for k, v in key.items()) and len(la) == len(key) for la in legal):
+        match = None
+        for la in legal:
+            base = {k: v for k, v in la.items() if k != "cheat"}
+            if base == key:
+                match = la
+                break
+        if match is None:
             raise IllegalMove("Недозволений хід")
+        is_cheat = bool(match.get("cheat"))
         ev: dict[str, Any] = {"player": p, **key, "defender": self.defender}
+        if t == "catch":
+            return self._apply_catch(p, action["card"], ev)
+        if t in ("attack", "defend", "transfer"):
+            self.owner[action["card"]] = p
+            if is_cheat:
+                self.cheats[action["card"]] = p
         if t == "attack":
             self.hands[p].remove(action["card"])
             self.known[p].discard(action["card"])
@@ -261,11 +317,42 @@ class Game:
         ev["bout_end"] = self._maybe_end_bout()
         return ev
 
+    def _apply_catch(self, p: str, card: str, ev: dict) -> dict:
+        cheater = self.cheats.get(card)
+        if not cheater:
+            self.catch_fail.add(p)   # хибне звинувачення — до кінця відбою ловити не можна
+            ev["caught"] = False
+            self.version += 1
+            ev["bout_end"] = None
+            return ev
+        # карта повертається мухлярові; якщо це була атака — знімаємо пару
+        for i, (a, d) in enumerate(self.table):
+            if d == card:
+                self.table[i][1] = None
+                break
+            if a == card:
+                self.table.pop(i)
+                if d:
+                    owner = self.owner.get(d, self.defender)
+                    self.hands[owner].append(d)
+                    self.owner.pop(d, None)
+                    self.cheats.pop(d, None)
+                break
+        self.hands[cheater].append(card)
+        self.known[cheater].add(card)
+        self.cheats.pop(card, None)
+        self.owner.pop(card, None)
+        self.passed.clear()
+        ev.update({"caught": True, "cheater": cheater})
+        self.version += 1
+        ev["bout_end"] = self._maybe_end_bout()
+        return ev
+
     def _attackers_done(self) -> bool:
         for q in self.attackers():
             if q in self.passed:
                 continue
-            if not self.hands[q] or not self._throwable(q):
+            if not self.hands[q] or not self._can_throw_any(q):
                 continue  # нічого підкинути — автоматично пас
             return False
         return True
@@ -283,6 +370,11 @@ class Game:
         return None
 
     def _end_bout(self, took: bool) -> None:
+        self.last_bout = {"table": [list(x) for x in self.table], "took": took, "n": self.bout,
+                          "defender": self.defender}
+        self.owner.clear()
+        self.cheats.clear()      # невиявлене мухлювання «проходить»
+        self.catch_fail.clear()
         cards = [c for pair in self.table for c in pair if c]
         if took:
             self.hands[self.defender].extend(cards)
@@ -340,7 +432,7 @@ class Game:
             return [self.attacker]
         if self.unbeaten() and not self.taking:
             return [self.defender]
-        return [q for q in self.attackers() if q not in self.passed and self._throwable(q)]
+        return [q for q in self.attackers() if q not in self.passed and self._can_throw_any(q)]
 
     def timeout_action(self, p: str) -> dict | None:
         """Дія за замовчуванням, якщо гравець не встиг."""
@@ -373,6 +465,8 @@ class Game:
             "discard_count": len(self.discard),
             "discard": list(self.discard),
             "table": [list(x) for x in self.table],
+            "last_bout": self.last_bout,
+            "mine_on_table": sorted(c for c, o in self.owner.items() if o == p) if p else [],
             "bout": self.bout,
             "bout_limit": self.bout_limit(),
             "attacker": self.attacker,

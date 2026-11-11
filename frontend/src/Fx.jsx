@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react'
+import { t } from './i18n.js'
 
 /** Іконка ігрової фішки (валюта гри). */
 export function Chip({ size }) {
-  return <i className="coin" style={size ? { width: size, height: size } : undefined} aria-label="фішок" title="фішки" />
+  return <i className="coin" style={size ? { width: size, height: size } : undefined} aria-label={t('фішок')} title={t('фішки')} />;
 }
 
 export function Intro({ id }) {
@@ -13,14 +14,14 @@ export function Intro({ id }) {
           {['14S', '14H', '14D', '14C', '6H'].map((c, i) => (
             <div key={c} className={`pcard ${c.endsWith('H') || c.endsWith('D') ? 'red' : ''}`}
               style={{ transform: `rotate(${(i - 2) * 16}deg)`, animationDelay: `${i * 60}ms` }}>
-              <span className="tl">{c.startsWith('14') ? 'Т' : '6'}<br />{{ S: '♠', H: '♥', D: '♦', C: '♣' }[c.slice(-1)]}</span>
+              <span className="tl">{c.startsWith('14') ? t('Т') : '6'}<br />{{ S: '♠', H: '♥', D: '♦', C: '♣' }[c.slice(-1)]}</span>
             </div>
           ))}
         </div>
       )}
-      {id === 'intro_ace' ? <div className="ace">♠</div> : <div className="logo-big">♠ Дурак</div>}
+      {id === 'intro_ace' ? <div className="ace">♠</div> : <div className="logo-big">{t('♠ Дурак')}</div>}
     </div>
-  )
+  );
 }
 
 const CONFETTI = ['#f2c14e', '#e5484d', '#3ecf8e', '#4ea1f2', '#c86bff', '#fff']

@@ -78,13 +78,13 @@ def recv_until(ws, pred, limit=4000):
     raise AssertionError("не дочекались")
 
 
-def play_vs_bots(client, uid, mode, stake=0, size=2, variant="podkidnoy"):
+def play_vs_bots(client, uid, mode, stake=0, size=2, variant="podkidnoy", rules=None):
     rng = random.Random(uid)
     with client.websocket_connect("/ws") as ws:
         ws.send_text(json.dumps({"auth": f"dev {uid}:Tester{uid}"}))
         recv_until(ws, lambda m: m["type"] == "hello")
         ws.send_text(json.dumps({"type": "find", "mode": mode, "size": size, "stake": stake,
-                                 "rules": {"variant": variant}}))
+                                 "rules": {"variant": variant, **(rules or {})}}))
         m = recv_until(ws, lambda m: m["type"] in ("room", "error"))
         assert m["type"] == "room", m
         room_id = m["room"]["id"]
@@ -122,7 +122,8 @@ def test_free_game_vs_bots(client):
     h = client.get("/api/history", headers={"Authorization": "dev 101"}).json()
     assert h["matches"][0]["outcome"] in ("win", "loss", "draw")
     ev = client.get(f"/api/admin/match/{h['matches'][0]['id']}", headers={"Authorization": "dev 1"}).json()
-    assert ev["events"][0]["type"] == "start" and ev["events"][-1]["type"] == "finish"
+    assert ev["events"][0]["type"] == "start"
+    assert "finish" in [e["type"] for e in ev["events"]]  # після фіналу боти ще можуть кинути смайлик
     assert all("hands" not in json.dumps(e["data"]) for e in ev["events"])
 
 
@@ -260,3 +261,26 @@ def test_valid_signature_passes_even_when_ip_blocked(client):
         assert client.get("/api/me", headers={"Authorization": f"tma {good}"}).status_code == 200
     finally:
         settings.bot_token = old
+
+
+def test_cheat_mode_in_any_mode_and_plays(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"auth": "dev 610:Cheater"}))
+        recv_until(ws, lambda m: m["type"] == "hello")
+        client.post("/api/admin/adjust", json={"user_id": 610, "amount": 100, "reason": "тест"},
+                    headers={"Authorization": "dev 1"})
+        ws.send_text(json.dumps({"type": "find", "mode": "stake", "size": 2, "stake": 10, "rules": {"cheating": True}}))
+        room = recv_until(ws, lambda m: m["type"] in ("room", "error"))
+        assert room["type"] == "room" and room["room"]["rules"]["cheating"] is True
+        ws.send_text(json.dumps({"type": "leave"}))
+        recv_until(ws, lambda m: m["type"] == "left")
+        ws.send_text(json.dumps({"type": "find", "mode": "free", "size": 2, "rules": {"hand_size": "6"}}))
+        assert recv_until(ws, lambda m: m["type"] == "error")["message"] == "Невірні правила"
+    m = play_vs_bots(client, 611, "free", size=2, rules={"cheating": True})
+    assert m["result"]["loser"] or m["result"]["draw"]
+
+
+def test_levels_awarded(client):
+    me = client.get("/api/me", headers={"Authorization": "dev 611"}).json()
+    assert me["progress"]["xp"] >= 10
+    assert me["progress"]["level"] >= 1

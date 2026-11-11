@@ -1,3 +1,4 @@
+import { t } from './i18n.js'
 // Клієнт API та WebSocket. Клієнт НЕ рахує баланс і не вирішує, чи хід дозволений:
 // сервер надсилає список дозволених дій, а кожен хід перевіряє сам.
 
@@ -9,7 +10,7 @@ function authHeader() {
   const q = new URLSearchParams(location.search)
   const id = q.get('dev') || localStorage.getItem('dev_id') || '1'
   try { localStorage.setItem('dev_id', id) } catch { /* ignore */ }
-  return `dev ${id}:${encodeURIComponent(q.get('name') || 'Гравець ' + id)}`
+  return `dev ${id}:${encodeURIComponent(q.get('name') || t('Гравець ') + id)}`;
 }
 
 export async function api(path, body) {
@@ -19,7 +20,7 @@ export async function api(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   })
   const data = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(data.detail || `Помилка ${r.status}`)
+  if (!r.ok) throw new Error(typeof data.detail === 'string' ? t(data.detail) : t('Помилка {0}', r.status))
   return data
 }
 
@@ -68,7 +69,7 @@ export class GameSocket {
 }
 
 export const SUIT = { S: '♠', C: '♣', D: '♦', H: '♥' }
-export const RANK = { 11: 'В', 12: 'Д', 13: 'К', 14: 'Т' }
+export const RANK = { 11: t('В'), 12: t('Д'), 13: t('К'), 14: t('Т') }
 export const rankOf = (c) => parseInt(c.slice(0, -1), 10)
 export const suitOf = (c) => c.slice(-1)
 export const label = (c) => `${RANK[rankOf(c)] || rankOf(c)}${SUIT[suitOf(c)]}`

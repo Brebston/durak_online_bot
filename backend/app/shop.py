@@ -25,6 +25,10 @@ CATALOG: list[dict] = [
     {"id": "back_vyshyvanka", "type": "back", "name": "Вишиванка", "price": 500},
     {"id": "back_galaxy", "type": "back", "name": "Галактика", "price": 600},
     {"id": "back_dragon", "type": "back", "name": "Луска дракона", "price": 800},
+    # нагороди за рівень (не продаються)
+    {"id": "back_bronze", "type": "back", "name": "Бронзова", "price": 0, "level": 5},
+    {"id": "back_silver", "type": "back", "name": "Срібна", "price": 0, "level": 10},
+    {"id": "back_gold", "type": "back", "name": "Золота", "price": 0, "level": 20},
     # ---- столи ----
     {"id": "table_green", "type": "table", "name": "Зелене сукно", "price": 0},
     {"id": "table_blue", "type": "table", "name": "Синє сукно", "price": 150},
@@ -62,7 +66,11 @@ DEFAULTS = {"back": "back_classic", "table": "table_green", "intro": "intro_clas
 
 
 class ShopError(Exception):
-    pass
+    """Повідомлення-ключ для перекладу + параметри ({0}, {1}…)."""
+
+    def __init__(self, key: str, *args):
+        super().__init__(key.format(*args) if args else key)
+        self.key, self.args_ = key, args
 
 
 class Shop:
@@ -71,7 +79,11 @@ class Shop:
         self.ledger = ledger
 
     def owned(self, uid: int) -> set[str]:
-        free = {i["id"] for i in CATALOG if i["price"] == 0}
+        from .levels import level_of
+
+        u = self.db.user(uid)
+        lvl = level_of(int(u.get("xp") or 0)) if u else 1
+        free = {i["id"] for i in CATALOG if i["price"] == 0 and lvl >= i.get("level", 0)}
         rows = self.db.q("SELECT item_id FROM inventory WHERE user_id=?", (uid,))
         return free | {r["item_id"] for r in rows}
 
@@ -95,6 +107,8 @@ class Shop:
             raise ShopError("Предмет не знайдено")
         if item_id in self.owned(uid):
             raise ShopError("Вже придбано")
+        if item.get("level"):
+            raise ShopError("Відкривається на рівні {0}", item["level"])
         try:
             ok = self.ledger.transfer(acc(uid), SHOP, item["price"], "shop_purchase", ref=item_id,
                                       reason=item["name"], idem=f"shop:{uid}:{item_id}")

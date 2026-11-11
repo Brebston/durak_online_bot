@@ -17,6 +17,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from .bot_i18n import bt, pick_lang
 from .config import settings
 from .db import DB
 from .ledger import BANK, Ledger, LedgerError, acc
@@ -46,6 +47,10 @@ class TgBot:
         self._register(r)
         self.dp.include_router(r)
 
+    def lang_of(self, user) -> str:
+        u = self.db.user(user.id) if user else None
+        return pick_lang(u.get("lang") if u else None, getattr(user, "language_code", None))
+
     def webapp_button(self, text: str = "🃏 Грати", room: str | None = None) -> InlineKeyboardMarkup:
         url = settings.webapp_url + (f"?room={room}" if room else "")
         return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))]])
@@ -62,13 +67,15 @@ class TgBot:
     async def run_polling(self) -> None:
         await self.dp.start_polling(self.bot, handle_signals=False)
 
-    async def notify_invite(self, uid: int, text: str, room_id: str) -> None:
+    async def notify_invite(self, uid: int, from_name: str, stake: int, room_id: str) -> None:
         """Запрошення другові, який зараз не в грі (якщо він не вимкнув сповіщення)."""
         u = self.db.user(uid)
         if not u or not u["notify"]:
             return
+        lang = pick_lang(u.get("lang"), None)
+        text = bt(lang, "invite_push", name=from_name, stake=bt(lang, "stake", n=stake) if stake else "")
         try:
-            await self.bot.send_message(uid, text, reply_markup=self.webapp_button("Приєднатися", room=room_id))
+            await self.bot.send_message(uid, text, reply_markup=self.webapp_button(bt(lang, "join"), room=room_id))
         except Exception:  # noqa: BLE001
             log.info("cannot notify %s", uid)
 
@@ -100,19 +107,20 @@ class TgBot:
             room = None
             if command.args and command.args.startswith("room_"):
                 room = command.args[5:]
-            text = ("Запрошення до гри! Натисніть кнопку, щоб приєднатися." if room
-                    else "Вітаю в «Дурак онлайн»! Підкидний і перевідний, 2–4 гравці, боти трьох рівнів.")
-            await m.answer(text, reply_markup=self.webapp_button(room=room))
+            lang = self.lang_of(u)
+            text = bt(lang, "invited") if room else bt(lang, "welcome")
+            await m.answer(text, reply_markup=self.webapp_button(bt(lang, "play"), room=room))
 
         @r.message(Command("id"))
         async def my_id(m: Message):
-            role = "адміністратор" if is_admin(m) else "гравець"
-            await m.answer(f"Ваш Telegram ID: {m.from_user.id} ({role})")
+            lang = self.lang_of(m.from_user)
+            role = bt(lang, "role_admin" if is_admin(m) else "role_player")
+            await m.answer(bt(lang, "id", id=m.from_user.id, role=role))
 
         @r.message(Command("balance"))
         async def balance(m: Message):
             a = acc(m.from_user.id)
-            await m.answer(f"Баланс: {self.ledger.balance(a)} фішок (доступно {self.ledger.available(a)}).")
+            await m.answer(bt(self.lang_of(m.from_user), "balance", b=self.ledger.balance(a), a=self.ledger.available(a)))
 
         @r.message(Command("terms"))
         async def terms(m: Message):
@@ -122,11 +130,11 @@ class TgBot:
         @r.message(Command("support", "paysupport"))
         async def support(m: Message, command: CommandObject):
             if not command.args:
-                await m.answer("Опишіть проблему після команди, напр.:\n/support Не зарахувались фішки після оплати")
+                await m.answer(bt(self.lang_of(m.from_user), "support_usage"))
                 return
             tid = self.db.ex("INSERT INTO tickets(user_id,text,created_at) VALUES(?,?,?)",
                              (m.from_user.id, command.args[:2000], int(time.time())))
-            await m.answer(f"Звернення №{tid} прийнято. Відповідь прийде сюди.")
+            await m.answer(bt(self.lang_of(m.from_user), "support_ok", n=tid))
             for admin in settings.admin_ids:
                 try:
                     await self.bot.send_message(admin, f"🆘 Звернення №{tid} від {m.from_user.id}: {command.args[:500]}")
@@ -157,15 +165,14 @@ class TgBot:
             new = self.ledger.post(acc(uid), chips, "deposit", ref=p.telegram_payment_charge_id,
                                    reason=f"{stars} Stars", idem=f"stars:{p.telegram_payment_charge_id}")
             if new:
-                await m.answer(f"✅ Зараховано {chips} фішок. Баланс: {self.ledger.balance(acc(uid))}.")
+                await m.answer(bt(self.lang_of(m.from_user), "paid", c=chips, b=self.ledger.balance(acc(uid))))
                 await self.notify(uid, {"type": "balance"})
 
         # ---------- адмін ----------
         @r.message(Command("give"))
         async def give(m: Message, command: CommandObject):
             if not is_admin(m):
-                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
-                               "додайте його в змінну ADMIN_IDS на сервері.")
+                await m.answer(bt(self.lang_of(m.from_user), "admin_only", id=m.from_user.id))
                 return
             parts = (command.args or "").split(maxsplit=2)
             if len(parts) < 3:
@@ -187,8 +194,7 @@ class TgBot:
         @r.message(Command("bank"))
         async def bank(m: Message, command: CommandObject):
             if not is_admin(m):
-                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
-                               "додайте його в змінну ADMIN_IDS на сервері.")
+                await m.answer(bt(self.lang_of(m.from_user), "admin_only", id=m.from_user.id))
                 return
             parts = (command.args or "").split(maxsplit=1)
             if len(parts) < 2:
@@ -205,8 +211,7 @@ class TgBot:
         @r.message(Command("refund"))
         async def refund(m: Message, command: CommandObject):
             if not is_admin(m):
-                await m.answer(f"Команда лише для адміністратора. Ваш Telegram ID: {m.from_user.id} — "
-                               "додайте його в змінну ADMIN_IDS на сервері.")
+                await m.answer(bt(self.lang_of(m.from_user), "admin_only", id=m.from_user.id))
                 return
             parts = (command.args or "").split()
             if len(parts) != 2:

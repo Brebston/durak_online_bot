@@ -65,7 +65,7 @@ export default function Shop({ me, reload, toast }) {
           <section className="card-box">
             <h3>Баланс: {me.balance.chips} <Chip /></h3>
             <p className="hint">1 ⭐ = {me.shop.rate} фішок. На фішки можна грати, купувати оформлення або подати
-              заявку на ручну виплату в Stars у профілі. Виплату перевіряє й надсилає адміністратор.</p>
+              заявку на ручну виплату в розділі «Вивід». Виплату перевіряє й надсилає адміністратор.</p>
           </section>
           <div className="packs">
             {me.shop.packs.map((s) => (

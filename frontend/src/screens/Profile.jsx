@@ -1,19 +1,34 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 
 const OUT = { win: ['Перемога', 'plus'], loss: ['Дурень', 'minus'], draw: ['Нічия', ''], cancelled: ['Скасовано', ''], playing: ['Триває', ''] }
 const KIND = {
   deposit: 'Поповнення Stars', admin_credit: 'Нарахування', admin_debit: 'Списання', stake_win: 'Виграш',
-  stake_loss: 'Програш', refund: 'Повернення Stars',
+  stake_loss: 'Програш', refund: 'Повернення Stars', withdrawal: 'Ручне виведення Stars',
 }
+const WITHDRAWAL_STATUS = { pending: 'Очікує схвалення', approved: 'Схвалено · очікує виплати', completed: 'Виконано', rejected: 'Відхилено' }
 
 export default function Profile({ me, reload, toast }) {
   const [hist, setHist] = useState(null)
   const [view, setView] = useState('matches')
   const [ticket, setTicket] = useState('')
+  const [withdrawals, setWithdrawals] = useState([])
+  const [withdrawChips, setWithdrawChips] = useState('')
+  const [withdrawBusy, setWithdrawBusy] = useState(false)
+  const loadWithdrawals = useCallback(() => api('/api/withdrawals').then((r) => setWithdrawals(r.requests)).catch((e) => toast(e.message)), [toast])
   useEffect(() => { api('/api/history').then(setHist).catch((e) => toast(e.message)) }, [toast])
+  useEffect(() => {
+    loadWithdrawals()
+    const timer = setInterval(loadWithdrawals, 30000)
+    return () => clearInterval(timer)
+  }, [loadWithdrawals])
   const st = me.stats
   const rate = st.played ? Math.round((st.wins / st.played) * 100) : 0
+  const chipsPerStar = me.withdrawal?.stars_per_chips || me.shop.rate
+  const chipsValue = Number(withdrawChips)
+  const hasOpenRequest = withdrawals.some((w) => ['pending', 'approved'].includes(w.status))
+  const canRequest = Number.isInteger(chipsValue) && chipsValue > 0 && chipsValue % chipsPerStar === 0 &&
+    chipsValue <= me.available.chips && !withdrawBusy && !hasOpenRequest
 
   const save = async (patch) => {
     await api('/api/settings', { ...me.settings, ...patch }).catch((e) => toast(e.message))
@@ -25,6 +40,16 @@ export default function Profile({ me, reload, toast }) {
       setTicket('')
       toast(`Звернення №${r.id} надіслано`)
     } catch (e) { toast(e.message) }
+  }
+  const requestWithdrawal = async () => {
+    if (!canRequest) return
+    setWithdrawBusy(true)
+    try {
+      const r = await api('/api/withdrawals', { chips: chipsValue })
+      toast(`Заявку №${r.id} на ${r.stars} ⭐ створено`)
+      setWithdrawChips('')
+      await Promise.all([loadWithdrawals(), reload()])
+    } catch (e) { toast(e.message) } finally { setWithdrawBusy(false) }
   }
 
   return (
@@ -44,6 +69,34 @@ export default function Profile({ me, reload, toast }) {
         <div><b className="plus">{st.wins}</b><span>перемог</span></div>
         <div><b className="minus">{st.losses}</b><span>поразок</span></div>
         <div><b>{rate}%</b><span>вінрейт</span></div>
+      </section>
+
+      <section className="card-box">
+        <h3>Ручне виведення в Telegram Stars</h3>
+        <p className="hint">Заявка резервує фішки. Після схвалення адміністратор надішле Stars вручну; це може зайняти час.
+          Кількість Stars рахується за курсом 1 ⭐ = {chipsPerStar} фішок.</p>
+        <input type="number" min={chipsPerStar} step={chipsPerStar} max={me.available.chips}
+          placeholder={`Сума фішок (кратно ${chipsPerStar})`} value={withdrawChips}
+          onChange={(e) => setWithdrawChips(e.target.value)} />
+        {Number.isInteger(chipsValue) && chipsValue > 0 && chipsValue % chipsPerStar === 0 && (
+          <p className="hint">До виплати: <b>{chipsValue / chipsPerStar} ⭐</b>
+            {me.withdrawal?.eur_per_star ? ` · орієнтовно €${(chipsValue / chipsPerStar * me.withdrawal.eur_per_star).toFixed(2)}` : ''}</p>
+        )}
+        <button className="btn primary" disabled={!canRequest} onClick={requestWithdrawal}>
+          {withdrawBusy ? 'Надсилання…' : 'Подати заявку'}
+        </button>
+        {hasOpenRequest && <p className="hint">У вас уже є відкрита заявка. Нову можна подати після її закриття.</p>}
+        <h4>Мої заявки</h4>
+        <ul className="list">
+          {withdrawals.length === 0 && <li className="hint">Заявок ще немає</li>}
+          {withdrawals.map((w) => (
+            <li key={w.id}><div><b>№{w.id} · {WITHDRAWAL_STATUS[w.status]}</b>
+              <small>{new Date(w.created_at * 1000).toLocaleString('uk-UA')} · {w.chips} фішок → {w.stars} ⭐
+                {w.eur_estimate != null ? ` · орієнтовно €${Number(w.eur_estimate).toFixed(2)}` : ''}</small>
+              {w.decision_note && <small>Причина: {w.decision_note}</small>}
+            </div></li>
+          ))}
+        </ul>
       </section>
 
       <section className="card-box">
@@ -107,8 +160,9 @@ export default function Profile({ me, reload, toast }) {
         </details>
         <details>
           <summary>Умови оплати</summary>
-          <p>Фішки купуються за Telegram Stars (1 ⭐ = {me.shop.rate} фішок). Фішки — лише ігрова валюта: вони не
-            виводяться і не обмінюються на гроші чи Stars. Ставка резервується до старту. «Дурень» віддає ставку, решта
+          <p>Фішки купуються за Telegram Stars (1 ⭐ = {me.shop.rate} фішок). Фішки є балансом гри. Для них можна подати
+            заявку на ручну виплату в Stars за курсом 1 ⭐ = {chipsPerStar} фішок; виплата потребує схвалення адміністратора і виконується вручну.
+            Ставка резервується до старту. «Дурень» віддає ставку, решта
             ділять її порівну, комісія {me.modes.commission_percent}%. Нічия чи скасований матч — резерв повертається.
             Повернення Stars за невикористані фішки — через /paysupport у боті.</p>
         </details>

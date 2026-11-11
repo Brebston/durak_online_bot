@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { api, label } from '../api.js'
 import { Chip } from '../Fx.jsx'
 
-const SECTIONS = [['overview', 'Огляд'], ['balance', 'Баланси'], ['matches', 'Матчі'], ['tickets', 'Звернення'], ['modes', 'Режими'], ['audit', 'Аудит']]
+const SECTIONS = [['overview', 'Огляд'], ['balance', 'Баланси'], ['withdrawals', 'Виведення'], ['matches', 'Матчі'], ['tickets', 'Звернення'], ['modes', 'Режими'], ['audit', 'Аудит']]
 const ts = (t) => new Date(t * 1000).toLocaleString('uk-UA')
 
 // window.prompt не працює в деяких клієнтах Telegram — власне модальне вікно
@@ -38,6 +38,7 @@ export default function Admin({ me, toast, reloadMe }) {
       </div>
       {sec === 'overview' && <Overview toast={toast} />}
       {sec === 'balance' && <Balances toast={toast} reloadMe={reloadMe} />}
+      {sec === 'withdrawals' && <Withdrawals toast={toast} />}
       {sec === 'matches' && <Matches toast={toast} />}
       {sec === 'tickets' && <Tickets toast={toast} />}
       {sec === 'modes' && <Modes toast={toast} reloadMe={reloadMe} />}
@@ -97,6 +98,69 @@ function Overview({ toast }) {
         <p className="hint">Комісія зібрана: {d.fee}</p>
       </section>
     </>
+  )
+}
+
+const WSTATUS = { pending: 'Очікує схвалення', approved: 'Схвалено · чекає виплати', completed: 'Виконано', rejected: 'Відхилено' }
+function Withdrawals({ toast }) {
+  const [list, setList] = useState([])
+  const [filter, setFilter] = useState('open')
+  const load = useCallback(() => {
+    const status = filter
+    api(`/api/admin/withdrawals${status ? `?status=${status}` : ''}`).then((r) => setList(r.requests)).catch((e) => toast(e.message))
+  }, [filter, toast])
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 30000)
+    return () => clearInterval(timer)
+  }, [load])
+  const act = async (w, action, body = {}) => {
+    try {
+      await api(`/api/admin/withdrawals/${w.id}/${action}`, body)
+      toast(`Заявку №${w.id} оновлено`)
+      load()
+    } catch (e) { toast(e.message) }
+  }
+  const reject = async (w) => {
+    const reason = await ask('Причина відхилення заявки:')
+    if (reason) await act(w, 'reject', { reason })
+  }
+  const complete = async (w) => {
+    const payout_reference = await ask('Підтвердження ручної виплати (наприклад, нотатка про подарунок Stars):')
+    if (payout_reference) await act(w, 'complete', { payout_reference })
+  }
+  return (
+    <section className="card-box">
+      <div className="seg wrap">
+        {[['open', 'Відкриті'], ['pending', 'Очікують'], ['approved', 'Схвалені'], ['completed', 'Виконані'], ['rejected', 'Відхилені']].map(([id, name]) =>
+          <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{name}</button>)}
+      </div>
+      <ul className="list">
+        {list.length === 0 && <li className="hint">Заявок немає</li>}
+        {list.map((w) => (
+          <li key={w.id}>
+            <div><b>№{w.id} · {WSTATUS[w.status]}</b>
+              <small>{w.name} · Telegram ID: {w.user_id}{w.username ? ` · @${w.username}` : ''}</small>
+              <small>{ts(w.created_at)} · {w.chips} фішок → {w.stars} ⭐
+                {w.eur_estimate != null ? ` · оцінка €${Number(w.eur_estimate).toFixed(2)}` : ''}</small>
+              {w.decision_note && <small>Причина: {w.decision_note}</small>}
+              {w.payout_reference && <small>Підтвердження виплати: {w.payout_reference}</small>}
+            </div>
+            <div className="right">
+              {w.status === 'pending' && <>
+                <button className="btn small primary" onClick={() => act(w, 'approve')}>Схвалити</button>
+                <button className="btn small warn" onClick={() => reject(w)}>Відхилити</button>
+              </>}
+              {w.status === 'approved' && <>
+                <button className="btn small primary" onClick={() => complete(w)}>Позначити виконаною</button>
+                <button className="btn small warn" onClick={() => reject(w)}>Відхилити</button>
+              </>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="hint">Після фактичного надсилання Stars позначте заявку виконаною та збережіть підтвердження.</p>
+    </section>
   )
 }
 

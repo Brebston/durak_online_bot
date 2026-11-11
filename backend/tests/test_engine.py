@@ -176,3 +176,15 @@ def test_rules_reject_bad_types():
     for bad in ({"hand_size": "6"}, {"max_table": 50}, {"turn_seconds": 1.5}, {"cheating": "yes"}, {"variant": 1}):
         with pytest.raises(ValueError):
             Rules.from_dict(bad)
+
+
+def test_bot_think_time_is_human_like():
+    from app.game.bot_ai import think_time
+
+    rng = random.Random(1)
+    g = Game(["a", "b"], Rules(), seed=2)
+    v = g.view(g.attacker)
+    times = [think_time(v, v["actions"][0], rng) for _ in range(300)]
+    assert min(times) >= 0.8                      # не миттєво
+    assert max(times) <= Rules().turn_seconds * 0.55   # встигає до кінця таймера
+    assert len({round(x, 1) for x in times}) > 20  # темп різний, не механічний

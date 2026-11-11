@@ -113,6 +113,7 @@ def client():
     main.init_state()
     with TestClient(main.app) as c:
         main.S.rooms.rng.uniform = lambda a, b: 0.0  # боти без затримки в тестах
+        main.S.rooms.speed = 0
         yield c
 
 
@@ -244,6 +245,8 @@ def test_restart_releases_holds(tmp_path):
     L.hold("u:9", 60, "room1")
     db.ex("INSERT INTO matches(id,created_at,mode,stake,rules,players,status) VALUES('m1',0,'stake',60,'{}','[]','playing')")
     main.init_state(str(db_file))
+    main.S.rooms.rng.uniform = lambda a, b: 0.0
+    main.S.rooms.speed = 0
     assert main.S.ledger.available("u:9") == 100
     assert main.S.db.one("SELECT status FROM matches WHERE id='m1'")["status"] == "cancelled"
 

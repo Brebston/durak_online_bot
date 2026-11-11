@@ -1,5 +1,10 @@
 import React, { useMemo } from 'react'
 
+/** Іконка ігрової фішки (валюта гри). */
+export function Chip({ size }) {
+  return <i className="coin" style={size ? { width: size, height: size } : undefined} aria-label="фішок" title="фішки" />
+}
+
 export function Intro({ id }) {
   return (
     <div className={`intro in-${id}`}>

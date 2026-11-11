@@ -17,35 +17,13 @@ from .db import DB
 from .game.bot_ai import LEVELS, choose_action
 from .game.engine import Game, IllegalMove, Rules
 from .ledger import BANK, Ledger, LedgerError, acc
+from .personas import TEXTS, pick_reaction, random_look, random_nick
 
 log = logging.getLogger("rooms")
 
 BOT_NAMES = {"easy": "легкий", "medium": "середній", "hard": "сильний"}
 
-_NICK_A = ["Сашко", "Dimon", "Олег", "Marina", "Віталік", "Kozak", "Taras", "Ірина", "Max", "Андрій", "Lena",
-           "Serhii", "Юля", "Bodya", "Назар", "Katya", "Roman", "Оля", "Vlad", "Ден", "Artem", "Natali", "Іван",
-           "Misha", "Тоха", "Yarik", "Світлана", "Igor", "Женя", "Pasha"]
-_NICK_B = ["Lucky", "Ace", "Joker", "Tuz", "King", "Shark", "Fox", "Wolf", "Козир", "Пікова", "Bubna", "Hero",
-           "Profi", "Ninja", "Batya", "Mamba", "Сокіл", "Tiger"]
 
-
-def random_nick(rng, taken: set[str]) -> str:
-    for _ in range(50):
-        r = rng.random()
-        a, b = rng.choice(_NICK_A), rng.choice(_NICK_B)
-        if r < 0.3:
-            nick = a
-        elif r < 0.55:
-            nick = f"{a}{rng.randint(1, 99):02d}"
-        elif r < 0.75:
-            nick = f"{a}_{b}"
-        elif r < 0.9:
-            nick = f"{b}{rng.choice(['', '_', '.'])}{rng.randint(7, 2009)}"
-        else:
-            nick = f"{a.lower()}{rng.choice(['', '_'])}{rng.randint(80, 2010)}"
-        if nick not in taken:
-            return nick
-    return f"Player{rng.randint(1000, 9999)}"
 MAX_TIMEOUTS = 3
 
 
@@ -63,6 +41,9 @@ class Seat:
     hold_id: int | None = None
     timeouts: int = 0
     back: str = "back_classic"
+    emojis: list[str] = field(default_factory=list)  # смайлики бота
+    chatty: float = 0.0                               # наскільки бот емоційний
+    last_emote: float = 0.0
 
     @property
     def account(self) -> str:
@@ -201,6 +182,53 @@ class RoomManager:
     def _remember(self, room: Room, ev: dict) -> None:
         room.moves += 1
         room.last = {**ev, "n": room.moves}
+        self._react(room, ev)
+
+    # ---------- реакції ботів (смайлики) ----------
+    def _react(self, room: Room, ev: dict) -> None:
+        if ev.get("bout_end") == "take":
+            taker = ev.get("defender")
+            for s in room.seats:
+                if s.bot:
+                    self._bot_emote(room, s, "i_took" if s.pid == taker else "they_took", 1.0 if s.pid == taker else 0.5)
+        elif ev.get("type") == "transfer":
+            s = room.seat_by_pid(ev.get("player"))
+            if s and s.bot:
+                self._bot_emote(room, s, "i_transferred", 0.8)
+
+    def _bot_emote(self, room: Room, seat: Seat, kind: str, scale: float = 1.0, text_chance: float = 0.0) -> None:
+        now = time.time()
+        if not seat.bot or now - seat.last_emote < 12 or self.rng.random() > seat.chatty * scale:
+            return
+        text = None
+        if text_chance and self.rng.random() < text_chance and kind in TEXTS:
+            text = self.rng.choice(TEXTS[kind])
+        emoji = None if text else pick_reaction(self.rng, kind, seat.emojis)
+        if not text and not emoji:
+            return
+        seat.last_emote = now
+
+        async def later():
+            await asyncio.sleep(self.rng.uniform(0.8, 2.6))
+            if room.id in self.rooms:
+                await self._post_chat(room, seat, text=text, emoji=emoji)
+
+        try:
+            asyncio.get_running_loop().create_task(later())
+        except RuntimeError:
+            pass
+
+    async def _post_chat(self, room: Room, seat: Seat, text: str | None = None, emoji: str | None = None) -> None:
+        msg: dict[str, Any] = {"pid": seat.pid, "name": seat.name, "ts": time.time()}
+        if emoji:
+            msg["emoji"] = emoji
+        else:
+            msg["text"] = text
+        room.chat.append(msg)
+        del room.chat[:-100]
+        self.log_event(room, seat.pid, "chat", {**msg, "bot": seat.bot})
+        for s in room.humans():
+            await self.send(s.user_id, {"type": "chat", "room": room.id, "msg": msg})
 
     # ---------- журнал ----------
     def log_event(self, room: Room, actor: str | None, type_: str, data: dict | None = None) -> None:
@@ -353,7 +381,9 @@ class RoomManager:
                 while pid in pids:
                     pid = f"u{self.rng.randint(5_000_000_000, 8_999_999_999)}"
                 name = random_nick(self.rng, {s.name for s in room.seats})
-                seat = Seat(pid=pid, name=name, bot=True, level=lv)
+                look = random_look(self.rng)
+                seat = Seat(pid=pid, name=name, bot=True, level=lv, back=look["back"],
+                            emojis=look["emojis"], chatty=look["chatty"])
                 if room.mode == "stake":
                     try:
                         seat.hold_id = self.ledger.hold(BANK, room.stake, room.id)
@@ -587,6 +617,10 @@ class RoomManager:
         self.db.ex("UPDATE matches SET status='finished', finished_at=?, result=? WHERE id=?",
                    (int(time.time()), json.dumps(room.result), room.match_id))
         self.log_event(room, None, "finish", room.result)
+        if not g.draw:
+            for s in room.seats:
+                if s.bot:
+                    self._bot_emote(room, s, "i_lost" if s.pid == g.loser else "i_won", 1.5, text_chance=0.35)
         await self.broadcast(room)
         for s in room.humans():
             if self.user_room.get(s.user_id) == room.id:
@@ -639,22 +673,20 @@ class RoomManager:
         seat = room.seat_of(uid)
         if not seat:
             raise RoomError("Ви не в кімнаті")
-        msg: dict[str, Any] = {"pid": seat.pid, "name": seat.name, "ts": time.time()}
         if emoji:
             allowed = self.shop.emojis(uid) if self.shop else []
             if emoji not in allowed:
                 raise RoomError("Цей смайлик ще не придбано")
-            msg["emoji"] = emoji
+            await self._post_chat(room, seat, emoji=emoji)
+            # хтось із ботів може відповісти смайликом
+            bots = [s for s in room.seats if s.bot]
+            if bots:
+                self._bot_emote(room, self.rng.choice(bots), "reply", 0.6)
         else:
             text = " ".join((text or "").split())[:200]
             if not text:
                 raise RoomError("Порожнє повідомлення")
-            msg["text"] = text
-        room.chat.append(msg)
-        del room.chat[:-100]
-        self.log_event(room, seat.pid, "chat", msg)
-        for s in room.humans():
-            await self.send(s.user_id, {"type": "chat", "room": room.id, "msg": msg})
+            await self._post_chat(room, seat, text=text)
 
     async def invite(self, uid: int, friend_id: int) -> None:
         room = self.current(uid)

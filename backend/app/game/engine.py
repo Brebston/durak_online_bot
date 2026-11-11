@@ -233,7 +233,7 @@ class Game:
         key = {k: action.get(k) for k in ("type", "card", "target") if action.get(k) is not None}
         if not any(all(la.get(k) == v for k, v in key.items()) and len(la) == len(key) for la in legal):
             raise IllegalMove("Недозволений хід")
-        ev: dict[str, Any] = {"player": p, **key}
+        ev: dict[str, Any] = {"player": p, **key, "defender": self.defender}
         if t == "attack":
             self.hands[p].remove(action["card"])
             self.known[p].discard(action["card"])

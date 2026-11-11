@@ -1,5 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, beep, haptic, rankOf, suitOf, SUIT, tg } from '../api.js'
+import { api, haptic, rankOf, suitOf, SUIT, tg } from '../api.js'
+import { Chip } from '../Fx.jsx'
+import { sfx } from '../sounds.js'
 import { inside, nearestPairs, resolveDrop } from '../dnd.js'
 import { Victory } from '../Fx.jsx'
 
@@ -217,11 +219,16 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   useEffect(() => {
     if (myTurn && !prevTurn.current) {
       haptic('medium')
-      if (me.settings.sound) beep()
+      sfx.play('turn')
     }
     prevTurn.current = myTurn
-  }, [myTurn, me.settings.sound])
+  }, [myTurn])
   useEffect(() => { setSel(null); setPending(null) }, [game.version])
+  useEffect(() => { sfx.play('deal') }, [room.match_id])
+  useEffect(() => {
+    if (game.status !== 'finished' || !result || result.cancelled) return
+    sfx.play(result.draw || result.loser !== myId ? 'win' : 'lose')
+  }, [game.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- анімації: прилітання карт і змітання столу ----------
   const seatCenter = (pid) => {
@@ -238,6 +245,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
     const was = new Set(prev.current.table.flat().filter(Boolean))
     const nowCards = game.table.flat().filter(Boolean)
     // нові карти на столі прилітають від того, хто їх кинув
+    if (nowCards.some((c) => !was.has(c))) sfx.play('card')
     for (const c of nowCards) {
       if (was.has(c)) continue
       const el = tableRef.current?.querySelector(`[data-card="${c}"]`)
@@ -258,6 +266,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
     if (prev.current.table.length && !game.table.length && last && last.n !== seen.current) {
       seen.current = last.n
       const took = last.bout_end === 'take'
+      sfx.play(took ? 'take' : 'beaten')
       const target = took ? seatCenter(prev.current.defender) : { x: window.innerWidth + 80, y: window.innerHeight * 0.4 }
       const items = Object.entries(prev.current.rects).map(([card, r]) => ({ card, ...r }))
       if (target && items.length) {
@@ -392,7 +401,10 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
               <div className={`back big cb-${me.cosmetics?.back || 'back_classic'}`} />
               <span className="count">{game.deck_count}</span>
             </div>
-          ) : <div className="trump-only">Козир {SUIT[game.trump]}</div>}
+          ) : null}
+          <div className={`trump-badge ${game.trump === 'H' || game.trump === 'D' ? 'red' : ''}`} title="Козир">
+            <span>{SUIT[game.trump]}</span><small>козир</small>
+          </div>
           <div className="discard">Бито: {game.discard_count}</div>
         </div>
         <div className="table-cards" ref={tableRef}>
@@ -434,7 +446,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
           })}
         </div>
         <div className="me-bar">
-          <span>{me.name} · козир {SUIT[game.trump]}{room.mode === 'stake' ? ` · ставка ${room.stake}` : ''}</span>
+          <span>{me.name}{room.mode === 'stake' ? <> · ставка {room.stake} <Chip /></> : ''}</span>
           <span>
             <button className="link" onClick={() => setChatOpen(true)}>💬 Чат</button>
             {playing && <button className="link" onClick={() => setConfirmExit(true)}>Здатися</button>}
@@ -492,7 +504,7 @@ function ResultModal({ result, myId, names, onExit, onAgain, room }) {
         <h2>{result.draw ? '🤝 Нічия' : lost ? '🃏 Ви дурень' : '🏆 Перемога!'}</h2>
         {!result.draw && !lost && <p>Дурень: {names[result.loser]?.name}</p>}
         {result.surrendered && <p className="hint">{names[result.surrendered]?.name} здався</p>}
-        {delta !== undefined && <p className={delta >= 0 ? 'plus big' : 'minus big'}>{delta >= 0 ? '+' : ''}{delta} фішок</p>}
+        {delta !== undefined && <p className={delta >= 0 ? 'plus big' : 'minus big'}>{delta >= 0 ? '+' : ''}{delta} <Chip /></p>}
         <p className="hint">Матч {room.match_id}</p>
         <div className="actions-col">
           <button className="btn primary" onClick={onAgain}>Ще раз</button>

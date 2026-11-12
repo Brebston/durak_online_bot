@@ -48,6 +48,62 @@ export default function Admin({ me, toast, reloadMe }) {
   )
 }
 
+const PERIODS = [['today', t('Сьогодні')], ['7d', t('7 днів')], ['30d', t('30 днів')], ['all', t('Увесь час')]]
+
+function BankReport({ toast }) {
+  const [period, setPeriod] = useState('7d')
+  const [r, setR] = useState(null)
+  useEffect(() => {
+    const tz = -new Date().getTimezoneOffset()
+    api(`/api/admin/bank?period=${period}&tz=${tz}`).then(setR).catch((e) => toast(e.message))
+  }, [period, toast])
+  const sign = (n) => (n > 0 ? `+${n}` : `${n}`)
+  return (
+    <section className="card-box">
+      <h3>{t('📈 Результати банку')}</h3>
+      <div className="seg">
+        {PERIODS.map(([v, l]) => <button key={v} className={period === v ? 'on' : ''} onClick={() => setPeriod(v)}>{l}</button>)}
+      </div>
+      {!r && <div className="spinner" />}
+      {r && (
+        <>
+          <div className="stats bank-stats">
+            <div><b className="plus">+{r.won}</b><span>{t('боти виграли')}</span></div>
+            <div><b className="minus">−{r.lost}</b><span>{t('боти програли')}</span></div>
+            <div><b className={r.game_net >= 0 ? 'plus' : 'minus'}>{sign(r.game_net)}</b><span>{t('підсумок ігор')}</span></div>
+          </div>
+          <div className="terms">
+            <div><span>{t('Матчів виграно / програно')}</span><b>{r.matches_won} / {r.matches_lost}</b></div>
+            <div><span>{t('Комісія з матчів')}</span><b className="plus">+{r.fee} <Chip /></b></div>
+            <div><span>{t('Покупки в магазині')}</span><b className="plus">+{r.shop} <Chip /></b></div>
+            <div><span>{t('Поповнення адміном')}</span><b>+{r.topups} <Chip /></b></div>
+            <div><span>{t('Списано адміном')}</span><b>−{r.withdrawn} <Chip /></b></div>
+            <div><span>{t('Зміна банку за період')}</span><b className={r.total >= 0 ? 'plus' : 'minus'}>{sign(r.total)} <Chip /></b></div>
+          </div>
+          {r.daily.length > 0 && (
+            <>
+              <h4>{t('По днях (останні 14)')}</h4>
+              <table className="daily">
+                <thead><tr><th>{t('Дата')}</th><th>{t('Ігри')}</th><th>{t('Комісія')}</th><th>{t('Магазин')}</th></tr></thead>
+                <tbody>
+                  {r.daily.map((row) => (
+                    <tr key={row.d}>
+                      <td>{row.d.slice(5)}</td>
+                      <td className={row.game >= 0 ? 'plus' : 'minus'}>{sign(row.game)}</td>
+                      <td>{row.fee}</td>
+                      <td>{row.shop}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function Overview({ toast }) {
   const [d, setD] = useState(null)
   const load = useCallback(() => api('/api/admin/overview').then(setD).catch((e) => toast(e.message)), [toast])
@@ -69,9 +125,10 @@ function Overview({ toast }) {
           <div><span>{t('Зараз у резерві (йдуть матчі)')}</span><b>{d.bank.balance - d.bank.available} <Chip /></b></div>
         </div>
         <p className="hint">{t('Поповнити: «Баланси» → отримувач «Банк гри», або в боті') + ' '}<code>{t('/bank 10000 причина')}</code>.</p>
+        <p className="hint">{t('У банк автоматично йдуть комісія з матчів і всі фішки, витрачені в магазині.')}</p>
       </section>
+      <BankReport toast={toast} />
       <section className="stats">
-        <div><b>{d.fee}</b><span>{t('комісія')}</span></div>
         <div><b>{d.users}</b><span>{t('гравців')}</span></div>
         <div><b>{d.open_tickets}</b><span>{t('звернень')}</span></div>
       </section>
@@ -96,7 +153,6 @@ function Overview({ toast }) {
             </li>
           ))}
         </ul>
-        <p className="hint">{t('Комісія зібрана:') + ' '}{d.fee}</p>
       </section>
     </>
   );

@@ -98,7 +98,7 @@ function Waiting({ room, send, onExit, me, serverNow }) {
           ) : <p className="hint">{t('Безкоштовна гра')}</p>}
           <ul className="seats">
             {room.seats.map((s) => (
-              <li key={s.pid}><Avatar url={s.avatar} name={s.name} size={30} /> {s.name}{s.you ? t(' (ви)') : ''}<span className="lvl">{s.lvl}</span>{s.bot && <span className="badge">🤖</span>}</li>
+              <li key={s.pid}><Avatar url={s.avatar} name={s.name} size={30} /> {s.name}{s.you ? t(' (ви)') : ''}<span className="lvl">{s.lvl}</span>{s.bot && <span className="badge"></span>}</li>
             ))}
             {Array.from({ length: free }).map((_, i) => <li key={i} className="empty">{t('Вільне місце…')}</li>)}
           </ul>
@@ -197,6 +197,13 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   const [ghosts, setGhosts] = useState(null)
   // ширина екрана — щоб уся рука вміщалася без прокрутки
   const [vw, setVw] = useState(() => window.innerWidth)
+  // анімація добору з колоди
+  const deckRef = useRef(null)
+  const deckRect = useRef(null)
+  const prevHand = useRef(null)
+  const prevCounts = useRef({})
+  const prevDeck = useRef(null)
+  const [draws, setDraws] = useState(null)
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth)
     window.addEventListener('resize', onResize)
@@ -419,6 +426,67 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   const handStep = handN > 1 ? Math.max(16, Math.min(42, (handAvail - CARD_W) / (handN - 1))) : 0
   const handFits = handN <= 1 || CARD_W + handStep * (handN - 1) <= handAvail
 
+  // ---------- карти летять з колоди: у руку (лицем) і суперникам (сорочкою) ----------
+  useLayoutEffect(() => {
+    const deckEl = deckRef.current
+    if (deckEl) {
+      const r = deckEl.getBoundingClientRect()
+      deckRect.current = { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }
+    const from = deckRect.current
+    const first = prevHand.current === null
+    const firstDeal = first && game.bout === 1 && !game.table.length && game.discard_count === 0
+    const drew = !first && prevDeck.current !== null && game.deck_count < prevDeck.current
+    if ((firstDeal || drew) && from) {
+      const lb = game.last_bout
+      const taker = !firstDeal && lb?.took ? lb.defender : null
+      const taken = taker ? lb.table.flat().filter(Boolean) : []
+      // після відбою стіл ще ~1 с «заморожений» — карти з колоди летять уже після нього
+      const delay0 = firstDeal ? 150 : 1050
+      const mineNew = game.hand.filter((c) => (firstDeal || !prevHand.current.has(c)) && !(taker === myId && taken.includes(c)))
+      mineNew.forEach((c, i) => {
+        const el = handRef.current?.querySelector(`[data-card="${c}"]`)
+        if (!el) return
+        const r = el.getBoundingClientRect()
+        const dx = from.x - (r.left + r.width / 2)
+        const dy = from.y - (r.top + r.height / 2)
+        el.animate([
+          { transform: `translate(${dx}px, ${dy}px) rotate(-12deg) scale(.85)`, filter: 'brightness(.6)' },
+          { transform: 'translate(0,0) rotate(0) scale(1)', filter: 'none' },
+        ], { duration: 380, delay: delay0 + i * 110, easing: 'cubic-bezier(.2,.8,.25,1)', fill: 'backwards' })
+      })
+      const flights = []
+      opponents.forEach((p, k) => {
+        const before = firstDeal ? 0 : (prevCounts.current[p.id] ?? p.cards)
+        const n = p.cards - before - (taker === p.id ? taken.length : 0)
+        const to = seatCenter(p.id)
+        if (n <= 0 || !to) return
+        for (let j = 0; j < n; j++) flights.push({ id: `${p.id}-${j}`, from, to, delay: delay0 + (k * 2 + j) * 90 })
+      })
+      if (flights.length) {
+        setDraws(flights)
+        const maxDelay = Math.max(...flights.map((f) => f.delay))
+        setTimeout(() => setDraws(null), maxDelay + 600)
+      }
+      if (mineNew.length || flights.length) setTimeout(() => sfx.play('deal'), delay0)
+    }
+    prevHand.current = new Set(game.hand)
+    prevCounts.current = Object.fromEntries(game.players.map((p) => [p.id, p.cards]))
+    prevDeck.current = game.deck_count
+  }, [game.version]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useLayoutEffect(() => {
+    if (!draws) return
+    document.querySelectorAll('.draw-back').forEach((el) => {
+      const f = draws.find((x) => x.id === el.dataset.id)
+      if (!f) return
+      el.animate([
+        { transform: 'translate(-50%, -50%) scale(.9)', opacity: 1 },
+        { transform: `translate(calc(-50% + ${f.to.x - f.from.x}px), calc(-50% + ${f.to.y - f.from.y}px)) scale(.5)`, opacity: 0.2 },
+      ], { duration: 420, delay: f.delay, easing: 'cubic-bezier(.3,.7,.3,1)', fill: 'both' })
+    })
+  }, [draws])
+
   const won = result && !result.cancelled && !result.draw && result.loser !== myId
 
   return (
@@ -450,7 +518,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
       <div className={`felt ${drag?.moved ? 'drop-hint' : ''}`} ref={feltRef}>
         <div className="deck-zone">
           {game.deck_count > 0 ? (
-            <div className="deck">
+            <div className="deck" ref={deckRef}>
               <div className="trump-under"><Card c={game.trump_card} small /></div>
               <div className={`back big cb-${me.cosmetics?.back || 'back_classic'}`} />
               <span className="count">{game.deck_count}</span>
@@ -517,6 +585,11 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
 
       {catchMsg && <div className={`catch-banner ${catchMsg.ok ? 'ok' : ''}`}>{catchMsg.ok ? '🚨 ' : '🤷 '}{catchMsg.text}</div>}
       {room.rules.cheating && playing && <div className="cheat-hint">{t('🃏 Шулер: торкніться підозрілої карти, щоб спіймати')}</div>}
+
+      {draws && draws.map((f) => (
+        <div key={f.id} data-id={f.id} className={`back draw-back cb-${me.cosmetics?.back || 'back_classic'}`}
+          style={{ position: 'fixed', left: f.from.x, top: f.from.y, zIndex: 31 }} />
+      ))}
 
       {ghosts && ghosts.items.map((g) => (
         <Card key={g.card} c={g.card} className="ghost" style={{ position: 'fixed', left: g.left, top: g.top, margin: 0, zIndex: 30 }} />

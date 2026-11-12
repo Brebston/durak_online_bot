@@ -63,7 +63,8 @@ def test_settle_split():
         L.hold(a, 100, "room")
     res = L.settle("room", "m1", 100, "u:1", ["u:2", BANK], commission_percent=10)
     assert res == {"u:1": -100, "u:2": 45, BANK: 45}
-    assert L.balance("fee") == 10
+    assert L.balance("fee") == 0  # комісія йде в банк гри
+    assert L.balance(BANK) == 1000 + 45 + 10
     assert L.settle("room", "m1", 100, "u:1", ["u:2", BANK], 10) == {}  # повторно не рахує
     assert L.balance("u:1") == 900 and L.held("u:1") == 0
     total = sum(L.balance(a) for a in ("u:1", "u:2", BANK, "fee"))
@@ -322,3 +323,35 @@ def test_tg_photo_only_from_telegram():
     assert safe_tg_photo("https://evil.com/x.jpg") is None
     assert safe_tg_photo("javascript:alert(1)") is None
     assert safe_tg_photo("https://t.me.evil.com/x.jpg") is None
+
+
+def test_bank_gets_shop_fee_and_report():
+    db = DB(":memory:")
+    L = Ledger(db)
+    # старі залишки «комісія» і «магазин» переносяться в банк
+    L.post("fee", 30, "fee")
+    L.post("shop", 70, "shop_purchase")
+    assert L.sweep_to_bank() == 100 and L.balance(BANK) == 100 and L.sweep_to_bank() == 0
+    L.post(BANK, 1000, "bank_topup")
+    for a in ("u:1", "u:2"):
+        L.post(a, 500, "deposit")
+    # бот (банк) виграв у u:1, програв u:2
+    L.hold("u:1", 100, "r1")
+    L.hold(BANK, 100, "r1")
+    L.settle("r1", "m1", 100, "u:1", [BANK], commission_percent=10)
+    L.hold("u:2", 100, "r2")
+    L.hold(BANK, 100, "r2")
+    L.settle("r2", "m2", 100, BANK, ["u:2"], commission_percent=10)
+    from app.shop import Shop
+    Shop(db, L).buy(2, "back_navy")  # 100 фішок → у банк
+    rep = L.bank_report(None)
+    assert rep["won"] == 90 and rep["lost"] == 100 and rep["game_net"] == -10
+    assert rep["matches_won"] == 1 and rep["matches_lost"] == 1
+    assert rep["fee"] == 20 and rep["shop"] == 100
+    assert rep["total"] == L.balance(BANK)
+
+
+def test_admin_bank_endpoint(client):
+    r = client.get("/api/admin/bank?period=7d&tz=60", headers={"Authorization": "dev 1"})
+    assert r.status_code == 200 and "game_net" in r.json() and "daily" in r.json()
+    assert client.get("/api/admin/bank", headers={"Authorization": "dev 2"}).status_code == 403

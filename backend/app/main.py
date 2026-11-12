@@ -20,7 +20,7 @@ from .bot_i18n import bt, pick_lang
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
-from .ledger import BANK, FEE, Ledger, LedgerError, acc
+from .ledger import BANK, Ledger, LedgerError, acc
 from .levels import progress
 from .rooms import RoomError, RoomManager
 from .shop import CATALOG, Shop, ShopError
@@ -91,6 +91,9 @@ def init_state(db_path: str | None = None) -> None:
     S.rooms = RoomManager(S.db, S.ledger, DealCipher(settings.deal_key), send_to_user, shop=S.shop, social=S.social)
     S.rooms.online = is_online
     recover_after_restart()
+    moved = S.ledger.sweep_to_bank()
+    if moved:
+        log.info("Перенесено в банк гри %s фішок комісії/магазину", moved)
 
 
 def recover_after_restart() -> None:
@@ -604,8 +607,8 @@ async def lobby(user: dict = Depends(current_user)):
 async def admin_overview(admin: dict = Depends(admin_user)):
     return {
         "bank": {"balance": S.ledger.balance(BANK), "available": S.ledger.available(BANK)},
-        "fee": S.ledger.balance(FEE),
-        "shop": S.ledger.balance("shop"),
+        "fee": S.ledger.bank_report(None)["fee"],
+        "shop": S.ledger.bank_report(None)["shop"],
         "stars": await stars_overview(),
         "users": S.db.one("SELECT COUNT(*) n FROM users")["n"],
         "matches": S.db.one("SELECT COUNT(*) n FROM matches")["n"],
@@ -757,6 +760,19 @@ async def complete_withdrawal(request_id: int, body: CompleteWithdrawalIn, admin
             log.info("cannot notify withdrawal user %s", row["user_id"])
     await send_to_user(row["user_id"], {"type": "balance"})
     return {"ok": True, "status": "completed"}
+
+
+@app.get("/api/admin/bank")
+async def admin_bank(period: str = "all", tz: int = 0, admin: dict = Depends(admin_user)):
+    """Моніторинг банку: виграші/програші ботів банку, комісія, магазин, поповнення."""
+    now = int(time.time())
+    if period not in ("today", "7d", "30d", "all"):
+        raise HTTPException(400, "Невідомий період")
+    tz = max(-14 * 60, min(14 * 60, tz))
+    day_start = (now + tz * 60) // 86400 * 86400 - tz * 60
+    since = {"today": day_start, "7d": now - 7 * 86400, "30d": now - 30 * 86400, "all": None}[period]
+    return {"period": period, **S.ledger.bank_report(since, tz),
+            "balance": S.ledger.balance(BANK), "available": S.ledger.available(BANK)}
 
 
 @app.get("/api/admin/users")

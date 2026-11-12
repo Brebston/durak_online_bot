@@ -9,7 +9,7 @@ import json
 import time
 
 from .db import DB
-from .ledger import SHOP, Ledger, LedgerError, acc
+from .ledger import BANK, Ledger, LedgerError, acc
 
 SLOTS = ("back", "table", "intro", "victory")
 
@@ -110,7 +110,8 @@ class Shop:
         if item.get("level"):
             raise ShopError("Відкривається на рівні {0}", item["level"])
         try:
-            ok = self.ledger.transfer(acc(uid), SHOP, item["price"], "shop_purchase", ref=item_id,
+            # фішки за покупки йдуть у банк гри
+            ok = self.ledger.transfer(acc(uid), BANK, item["price"], "shop_purchase", ref=item_id,
                                       reason=item["name"], idem=f"shop:{uid}:{item_id}")
         except LedgerError as e:
             raise ShopError(str(e))

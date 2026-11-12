@@ -289,3 +289,9 @@ details p { color: #d6e6dd; font-size: 14px; }
 .hand { justify-content: center; overflow-x: visible; padding-left: 10px; padding-right: 10px; }
 .hand.scroll { justify-content: flex-start; overflow-x: auto; }
 .hand .pcard, .hand .pcard:first-child { margin-left: 0; }
+.bank-stats { grid-template-columns: repeat(3, 1fr); margin: 12px 0 6px; }
+table.daily { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.daily th { text-align: right; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--panel2); }
+table.daily td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--panel); }
+table.daily th:first-child, table.daily td:first-child { text-align: left; }
+.draw-back { width: 40px; height: 58px; border-radius: 5px; pointer-events: none; opacity: 0; }

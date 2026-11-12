@@ -128,7 +128,7 @@ class Ledger:
                     self._insert(conn, w, share, "stake_win", ref=match_id, idem=f"settle:{match_id}:win:{i}")
                 out[w] = share
             if fee:
-                self._insert(conn, FEE, fee, "fee", ref=match_id, idem=f"settle:{match_id}:fee")
+                self._insert(conn, BANK, fee, "fee", ref=match_id, idem=f"settle:{match_id}:fee")  # комісія — у банк гри
         return out
 
     def create_withdrawal_request(self, uid: int, chips: int, stars: int, eur_estimate: float | None) -> int:
@@ -180,6 +180,50 @@ class Ledger:
         if inserted.rowcount != 1:
             raise LedgerError("Списання за цією заявкою вже проведене")
         conn.execute("UPDATE holds SET status='settled' WHERE id=? AND status='active'", (hold["id"],))
+
+    def sweep_to_bank(self) -> int:
+        """Переносить у банк гри залишки старих рахунків «комісія» і «магазин» (до того, як усе йшло в банк)."""
+        moved = 0
+        with self.db.tx() as conn:
+            for account, kind in ((FEE, "fee_to_bank"), (SHOP, "shop_to_bank")):
+                bal = self.balance(account, conn)
+                if bal > 0:
+                    self._insert(conn, account, -bal, kind, reason="Перенесено в банк гри")
+                    self._insert(conn, BANK, bal, kind, reason="Перенесено в банк гри")
+                    moved += bal
+        return moved
+
+    def bank_report(self, since: int | None, tz_minutes: int = 0, days: int = 14) -> dict:
+        """Звіт банку гри: скільки виграли/програли боти банку, комісія, магазин, поповнення."""
+        where = "account=?" + (" AND created_at>=?" if since else "")
+        args: tuple = (BANK, since) if since else (BANK,)
+        by_kind = {r["kind"]: r["s"] for r in self.db.q(
+            f"SELECT kind, COALESCE(SUM(amount),0) s FROM transactions WHERE {where} GROUP BY kind", args)}
+        # результат по матчах (бот проти бота в одному матчі взаємно гаситься)
+        per_match = self.db.q(
+            f"SELECT ref, SUM(amount) net FROM transactions WHERE {where} AND kind IN ('stake_win','stake_loss') "
+            "GROUP BY ref", args)
+        won = sum(r["net"] for r in per_match if r["net"] > 0)
+        lost = -sum(r["net"] for r in per_match if r["net"] < 0)
+        shift = int(tz_minutes) * 60
+        daily = self.db.q(
+            "SELECT date(created_at + ?, 'unixepoch') d, "
+            "SUM(CASE WHEN kind IN ('stake_win','stake_loss') THEN amount ELSE 0 END) game, "
+            "SUM(CASE WHEN kind='fee' THEN amount ELSE 0 END) fee, "
+            "SUM(CASE WHEN kind='shop_purchase' THEN amount ELSE 0 END) shop "
+            "FROM transactions WHERE account=? AND created_at >= ? GROUP BY d ORDER BY d DESC",
+            (shift, BANK, int(time.time()) - days * 86400))
+        return {
+            "won": won, "lost": lost, "game_net": won - lost,
+            "matches_won": sum(1 for r in per_match if r["net"] > 0),
+            "matches_lost": sum(1 for r in per_match if r["net"] < 0),
+            "fee": by_kind.get("fee", 0),
+            "shop": by_kind.get("shop_purchase", 0),
+            "topups": by_kind.get("bank_topup", 0) + by_kind.get("fee_to_bank", 0) + by_kind.get("shop_to_bank", 0),
+            "withdrawn": -by_kind.get("bank_withdraw", 0),
+            "total": sum(by_kind.values()),
+            "daily": daily,
+        }
 
     def history(self, account: str, limit: int = 50) -> list[dict]:
         return self.db.q(

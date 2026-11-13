@@ -12,16 +12,18 @@ function ac() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return null
+    // iOS: звук як у медіа, а не «системний» (інакше його глушить беззвучний режим)
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback' } catch { /* ignore */ }
     ctx = new AC()
     master = ctx.createGain()
-    master.gain.value = 0.55
+    master.gain.value = 0.8
     // легка компресія, щоб звуки не «різали» вухо
     const comp = ctx.createDynamicsCompressor()
     comp.threshold.value = -18
     comp.ratio.value = 3
     master.connect(comp).connect(ctx.destination)
   }
-  if (ctx.state === 'suspended') ctx.resume()
+  if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {})
   return ctx
 }
 
@@ -159,8 +161,27 @@ export const sfx = {
   },
 }
 
-// iOS/Telegram дозволяють звук лише після першого дотику
+// iOS/Telegram дозволяють звук лише після дотику, причому «дотиком» WebKit вважає touchend/click,
+// а не pointerdown. Тримаємо слухачі, доки контекст справді не запрацює, і граємо тишу в межах жесту.
+// Після згортання Mini App iOS «перериває» контекст — відновлюємо при наступному дотику.
 if (typeof window !== 'undefined') {
-  const unlock = () => { try { ac(); loadSamples() } catch { /* ignore */ } window.removeEventListener('pointerdown', unlock) }
-  window.addEventListener('pointerdown', unlock)
+  const EVENTS = ['touchend', 'click', 'pointerup', 'keydown']
+  const unlock = () => {
+    try {
+      const c = ac()
+      if (!c) return
+      loadSamples()
+      const silent = c.createBuffer(1, 1, 22050)
+      const src = c.createBufferSource()
+      src.buffer = silent
+      src.connect(c.destination)
+      src.start(0)
+      if (c.state === 'running') EVENTS.forEach((e) => window.removeEventListener(e, unlock, true))
+    } catch { /* ignore */ }
+  }
+  const arm = () => EVENTS.forEach((e) => window.addEventListener(e, unlock, true))
+  arm()
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') arm()
+  })
 }

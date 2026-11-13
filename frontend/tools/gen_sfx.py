@@ -110,7 +110,7 @@ def card_defend(seed):
     buf = np.zeros(int(SR * 0.28))
     place(buf, paper(0.035, 2500, 9000, 0.008, 0.012, 0.3), 0.0)
     place(buf, paper(0.06, 800, 5000, 0.0005, 0.016, 1.2), 0.03)
-    place(buf, paper(0.03, 4000, 10000, 0.0005, 0.006, 0.6), 0.03)    # клац краю
+    place(buf, paper(0.03, 3000, 6500, 0.001, 0.006, 0.3), 0.03)      # клац краю
     place(buf, felt_thump(0.75, 95), 0.031)
     return norm(reverb(buf, 0.2, 0.1), 0.8)
 
@@ -163,22 +163,15 @@ def beaten():
 
 
 # ---------- музичні ----------
-def marimba(f, dur=1.4, vol=1.0):
+def soft(f, dur=1.2, vol=1.0, decay=0.35, attack=0.012, bright=0.18):
+    """Мʼякий «щипок» (як калімба/фетрове піаніно): майже чистий синус, плавна атака, без дзвону."""
     n = int(SR * dur)
     t = np.arange(n) / SR
-    y = (np.sin(2 * np.pi * f * t) * np.exp(-t / 0.35)
-         + 0.35 * np.sin(2 * np.pi * f * 3.93 * t) * np.exp(-t / 0.06)
-         + 0.12 * np.sin(2 * np.pi * f * 9.2 * t) * np.exp(-t / 0.02))
-    y *= np.clip(t / 0.003, 0, 1)
-    return y * vol
-
-
-def bell(f, dur=1.6, vol=1.0):
-    n = int(SR * dur)
-    t = np.arange(n) / SR
-    parts = [(1, 1, 0.9), (2.0, 0.4, 0.5), (2.76, 0.25, 0.35), (5.4, 0.12, 0.15), (8.9, 0.06, 0.08)]
-    y = sum(a * np.sin(2 * np.pi * f * m * t) * np.exp(-t / tau) for m, a, tau in parts)
-    return y * np.clip(t / 0.002, 0, 1) * vol
+    y = (np.sin(2 * np.pi * f * t)
+         + bright * np.sin(2 * np.pi * 2 * f * t) * np.exp(-t / (decay * 0.5))
+         + 0.04 * np.sin(2 * np.pi * 3 * f * t) * np.exp(-t / (decay * 0.3)))
+    y *= np.clip(t / attack, 0, 1) ** 2 * np.exp(-t / decay)
+    return lp(y, 2200) * vol
 
 
 def pad(freqs, dur, vol=0.3, attack=0.08, tau=0.6):
@@ -186,10 +179,10 @@ def pad(freqs, dur, vol=0.3, attack=0.08, tau=0.6):
     t = np.arange(n) / SR
     y = np.zeros(n)
     for f in freqs:
-        for det in (-0.004, 0, 0.004):
+        for det in (-0.003, 0, 0.003):
             ph = rng.uniform(0, 2 * np.pi)
-            y += np.sin(2 * np.pi * f * (1 + det) * t + ph) + 0.3 * np.sin(4 * np.pi * f * (1 + det) * t + ph)
-    y = lp(y, 2500) * env(n, attack, tau)
+            y += np.sin(2 * np.pi * f * (1 + det) * t + ph)
+    y = lp(y, 1600) * env(n, attack, tau)
     return y / len(freqs) * vol
 
 
@@ -200,63 +193,59 @@ def note(name):
     return 440 * 2 ** ((semi + 12 * (octv - 4)) / 12)
 
 
+def warm(x, size, mix):
+    """Тепла реверберація без «шипіння» у високих."""
+    return lp(reverb(x, size, mix), 3500)
+
+
 def win():
-    buf = np.zeros(int(SR * 2.2))
-    seq = ["C5", "E5", "G5", "C6"]
-    for i, n in enumerate(seq):
-        place(buf, marimba(note(n), 1.0, 0.8), i * 0.09)
-    place(buf, pad([note("C4"), note("E4"), note("G4"), note("C5")], 1.6, 0.5, 0.05, 0.5), 0.36)
-    place(buf, bell(note("G6"), 1.2, 0.25), 0.36)
-    place(buf, bell(note("C7"), 1.2, 0.18), 0.46)
-    # іскорки
-    for k in range(6):
-        place(buf, bell(note("E7") * (1 + 0.06 * k), 0.4, 0.06), 0.5 + 0.07 * k)
-    return norm(reverb(buf, 0.9, 0.25), 0.75)
+    """Перемога: тепле висхідне арпеджіо й мʼякий акорд, без дзвонів."""
+    buf = np.zeros(int(SR * 2.4))
+    for i, n in enumerate(["C4", "E4", "G4", "C5"]):
+        place(buf, soft(note(n), 1.6, 0.7, 0.45), i * 0.12)
+    place(buf, pad([note("C3"), note("G3"), note("E4"), note("C4")], 1.8, 0.45, 0.12, 0.7), 0.4)
+    place(buf, soft(note("E5"), 1.4, 0.25, 0.5, bright=0.08), 0.52)
+    return norm(warm(buf, 0.9, 0.22), 0.6)
 
 
 def lose():
-    buf = np.zeros(int(SR * 1.9))
-    seq = [("E4", 0), ("Eb4", 0.22), ("D4", 0.44), ("Db4", 0.66)]
-    for n, at in seq:
-        f = note(n)
-        tt = t_(0.7 if at < 0.6 else 1.1)
-        vib = 1 + 0.006 * np.sin(2 * np.pi * 5.5 * tt) * (tt > 0.15)
-        y = np.sin(2 * np.pi * np.cumsum(f * vib) / SR)
-        y = y + 0.4 * np.sin(2 * 2 * np.pi * np.cumsum(f * vib) / SR) + 0.2 * np.sin(3 * 2 * np.pi * np.cumsum(f * vib) / SR)
-        e = env(len(tt), 0.03, 0.25 if at < 0.6 else 0.45)
-        place(buf, lp(y, 1400) * e * 0.5, at)
-    place(buf, felt_thump(0.4, 70, 0.08), 0.66)
-    return norm(reverb(buf, 0.7, 0.22), 0.6)
+    """Поразка: тихе спадне «е-ех», без різких тембрів."""
+    buf = np.zeros(int(SR * 2.0))
+    for i, n in enumerate(["E4", "D4", "C4", "A3"]):
+        place(buf, soft(note(n), 1.2, 0.6, 0.35 if i < 3 else 0.6, attack=0.03, bright=0.1), i * 0.2)
+    place(buf, pad([note("A2"), note("E3"), note("C4")], 1.3, 0.3, 0.15, 0.5), 0.6)
+    return norm(warm(buf, 0.7, 0.2), 0.5)
 
 
 def tie():
-    buf = np.zeros(int(SR * 1.4))
-    place(buf, marimba(note("G4"), 1.0, 0.7), 0)
-    place(buf, marimba(note("C5"), 1.0, 0.7), 0.14)
-    place(buf, pad([note("G3"), note("C4"), note("D4")], 1.0, 0.3, 0.05, 0.4), 0.14)
-    return norm(reverb(buf, 0.6, 0.2), 0.55)
+    buf = np.zeros(int(SR * 1.6))
+    place(buf, soft(note("G4"), 1.2, 0.6, 0.4), 0)
+    place(buf, soft(note("C5"), 1.2, 0.6, 0.45), 0.16)
+    place(buf, pad([note("C3"), note("G3"), note("D4")], 1.1, 0.25, 0.1, 0.45), 0.16)
+    return norm(warm(buf, 0.6, 0.2), 0.45)
 
 
 def turn():
-    buf = np.zeros(int(SR * 1.4))
-    place(buf, marimba(note("E5"), 1.2, 0.6), 0)
-    place(buf, marimba(note("A5"), 1.2, 0.5), 0.09)
-    return norm(reverb(buf, 0.5, 0.18), 0.45)
+    """Ваш хід: ледь чутне мʼяке «тук» двома низькими нотами, без дзвону."""
+    buf = np.zeros(int(SR * 0.9))
+    place(buf, soft(note("G4"), 0.7, 0.6, 0.18, attack=0.015, bright=0.08), 0)
+    place(buf, soft(note("C5"), 0.7, 0.45, 0.2, attack=0.015, bright=0.06), 0.08)
+    return norm(warm(buf, 0.35, 0.12), 0.3)
 
 
 def coin():
     buf = np.zeros(int(SR * 1.0))
-    place(buf, bell(note("B6"), 0.6, 0.6), 0)
-    place(buf, bell(note("E7"), 0.8, 0.6), 0.075)
-    return norm(reverb(buf, 0.5, 0.15), 0.5)
+    place(buf, soft(note("E5"), 0.8, 0.6, 0.22, bright=0.12), 0)
+    place(buf, soft(note("A5"), 0.8, 0.5, 0.28, bright=0.1), 0.07)
+    return norm(warm(buf, 0.4, 0.15), 0.4)
 
 
 def emoji():
     n = int(SR * 0.16)
     t = np.arange(n) / SR
-    f = 380 + 900 * (1 - np.exp(-t / 0.03))
-    y = np.sin(2 * np.pi * np.cumsum(f) / SR) * env(n, 0.003, 0.035)
-    return norm(reverb(y, 0.2, 0.1), 0.45)
+    f = 330 + 450 * (1 - np.exp(-t / 0.03))
+    y = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.clip(t / 0.006, 0, 1) * np.exp(-t / 0.04)
+    return norm(warm(y, 0.2, 0.08), 0.35)
 
 
 def catch():
@@ -265,20 +254,20 @@ def catch():
     buf = np.zeros(int(SR * 1.3))
     n = int(SR * 0.25)
     t = np.arange(n) / SR
-    x = band(rng.standard_normal(n), 600, 5000) * np.sin(np.pi * t / 0.25) ** 2 * 0.5
+    x = band(rng.standard_normal(n), 400, 3000) * np.sin(np.pi * t / 0.25) ** 2 * 0.4
     place(buf, x, 0)
-    place(buf, felt_thump(0.9, 80, 0.06), 0.22)
-    place(buf, marimba(note("A4"), 0.95, 0.6), 0.23)
-    place(buf, marimba(note("Eb5"), 0.95, 0.5), 0.23)
-    return norm(reverb(buf, 0.4, 0.15), 0.7)
+    place(buf, felt_thump(0.8, 80, 0.06), 0.22)
+    place(buf, soft(note("A3"), 0.9, 0.6, 0.3), 0.23)
+    place(buf, soft(note("E4"), 0.9, 0.45, 0.3), 0.23)
+    return norm(warm(buf, 0.4, 0.15), 0.6)
 
 
 def achievement():
-    buf = np.zeros(int(SR * 1.6))
-    for i, n in enumerate(["G5", "B5", "D6", "G6"]):
-        place(buf, bell(note(n), 1.0, 0.5), i * 0.06)
-    place(buf, pad([note("G4"), note("B4"), note("D5")], 1.2, 0.35, 0.03, 0.4), 0.18)
-    return norm(reverb(buf, 0.8, 0.25), 0.6)
+    buf = np.zeros(int(SR * 1.8))
+    for i, n in enumerate(["G4", "B4", "D5", "G5"]):
+        place(buf, soft(note(n), 1.3, 0.55, 0.4, bright=0.1), i * 0.09)
+    place(buf, pad([note("G3"), note("D4"), note("B4")], 1.3, 0.3, 0.08, 0.5), 0.25)
+    return norm(warm(buf, 0.8, 0.22), 0.5)
 
 
 def click():
@@ -297,7 +286,10 @@ SOUNDS = {
 }
 
 for name, fn in SOUNDS.items():
-    y = fn().astype(np.float32)
+    y = fn()
+    # загальне «пом'якшення»: зрізаємо різкі верхи, від яких втомлюються вуха
+    y = lp(y, 5500 if name.startswith(("card", "throw", "defend", "draw", "deal", "take", "beaten", "click")) else 4000)
+    y = y.astype(np.float32)
     # мʼякий кінець без клацання
     fade = min(len(y), int(SR * 0.06))
     y[-fade:] *= np.linspace(1, 0, fade)

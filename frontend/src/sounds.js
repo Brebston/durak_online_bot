@@ -111,7 +111,7 @@ const SAMPLES = {
   draw: ['draw0', 'draw1', 'draw2'], deal: ['deal'], take: ['take'], beaten: ['beaten'], turn: ['turn'], win: ['win'],
   lose: ['lose'], tie: ['tie'], coin: ['coin'], emoji: ['emoji'], catch: ['catch'], achievement: ['achievement'], click: ['click'],
 }
-const VOLUME = { turn: 0.8, emoji: 0.8, draw: 0.7, click: 0.6 }
+const VOLUME = { turn: 0.6, emoji: 0.7, draw: 0.6, click: 0.5, coin: 0.8 }
 const FALLBACK = { throw: 'card', defend: 'card', draw: 'click', tie: 'turn', catch: 'take', achievement: 'win' }
 const buffers = {}
 let loading = false

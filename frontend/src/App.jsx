@@ -8,7 +8,7 @@ import Profile from './screens/Profile.jsx'
 import Shop from './screens/Shop.jsx'
 import Friends from './screens/Friends.jsx'
 import Admin from './screens/Admin.jsx'
-import Withdrawals from './screens/Withdrawals.jsx'
+import Leaderboard from './screens/Leaderboard.jsx'
 import { lang, t } from './i18n.js'
 
 export default function App() {
@@ -21,11 +21,14 @@ export default function App() {
   const [dm, setDm] = useState(null) // останнє вхідне повідомлення (для живого оновлення чату)
   const [showIntro, setShowIntro] = useState(true)
   const [tick, setTick] = useState(0) // зміни в друзях/повідомленнях
+  const [daily, setDaily] = useState(null) // нагорода за серію днів
+  const [lobbyView, setLobbyView] = useState('quick')
   const sock = useRef(null)
   const lastFind = useRef(null)
 
   const loadMe = useCallback(() => api('/api/me').then((m) => {
     sfx.setEnabled(m.settings.sound)
+    if (m.daily) setDaily(m.daily)
     setMe(m)
     // мова інтерфейсу потрібна й боту (повідомлення в Telegram)
     if (m.lang !== lang) api('/api/lang', { lang }).catch(() => {})
@@ -57,7 +60,22 @@ export default function App() {
         setRoom(null)
         loadMe()
       } else if (m.type === 'xp') {
-        if (m.levelup) { sfx.play('win'); toast(t('🎉 Новий рівень {0}!', m.level)) } else toast(`+${m.gain} XP`)
+        if (m.levelup) { sfx.play('achievement'); toast(t('🎉 Новий рівень {0}!', m.level)) } else toast(`+${m.gain} XP`)
+        loadMe()
+      } else if (m.type === 'progress') {
+        const lines = [
+          ...(m.quests || []).map((q) => t('✅ Завдання виконано: +{0} XP', q.reward)),
+          ...(m.achievements || []).map((a) => t('🏅 Нове досягнення: {0}', t(a.name))),
+        ]
+        if (m.rating) lines.push(t('📈 Рейтинг: {0} ({1})', m.rating.value, (m.rating.delta >= 0 ? '+' : '') + m.rating.delta))
+        if (m.achievements?.length) sfx.play('achievement')
+        if (lines.length) setTimeout(() => toast(lines.join(' · ')), 1200)
+        loadMe()
+      } else if (m.type === 'tournament') {
+        if (m.event === 'started') toast(t('🏆 Турнір почався! Ваш матч ось-ось стартує.'))
+        else if (m.event === 'out') toast(t('Ви вибули з турніру. Дякуємо за гру!'))
+        else if (m.event === 'won') { sfx.play('win'); toast(t('🏆 Ви виграли турнір! Титул і чемпіонська сорочка — ваші.')) }
+        else if (m.event === 'finished') toast(t('Турнір завершено. Переможець: {0}', m.winner))
         loadMe()
       } else if (m.type === 'balance') {
         loadMe()
@@ -121,7 +139,11 @@ export default function App() {
           me={me}
           send={send}
           toast={toast}
-          onExit={() => { send({ type: 'leave' }); setRoom(null) }}
+          onExit={() => {
+            send({ type: 'leave' })
+            if (room.room.tournament) { setTab('play'); setLobbyView('tournaments') }
+            setRoom(null)
+          }}
           onAgain={() => { setRoom(null); if (lastFind.current) send(lastFind.current) }}
         />
         {err && <div className="toast">{err}</div>}
@@ -134,9 +156,9 @@ export default function App() {
   const badge = (me.friend_requests || 0) + (me.unread || 0)
   const tabs = [
     ['play', '🃏', t('Грати')],
+    ['top', '🏆', t('Топ')],
     ['friends', '👥', t('Друзі'), badge],
     ['shop', '🛍', t('Магазин')],
-    ['withdrawals', '⭐', t('Вивід')],
     ['profile', '👤', t('Кабінет')],
     ...(me.is_admin ? [['admin', '🛠', t('Адмін')]] : []),
   ]
@@ -150,10 +172,10 @@ export default function App() {
         </div>
       </header>
       <main className="content">
-        {tab === 'play' && <Lobby me={me} send={send} />}
+        {tab === 'play' && <Lobby key={lobbyView} me={me} send={send} toast={toast} view={lobbyView} />}
+        {tab === 'top' && <Leaderboard me={me} toast={toast} />}
         {tab === 'friends' && <Friends me={me} toast={toast} reloadMe={loadMe} incoming={dm} tick={tick} />}
         {tab === 'shop' && <Shop me={me} reload={loadMe} toast={toast} />}
-        {tab === 'withdrawals' && <Withdrawals me={me} reload={loadMe} toast={toast} />}
         {tab === 'profile' && <Profile me={me} reload={loadMe} toast={toast} />}
         {tab === 'admin' && me.is_admin && <Admin me={me} toast={toast} reloadMe={loadMe} />}
       </main>
@@ -166,6 +188,21 @@ export default function App() {
       </nav>
       {err && <div className="toast">{err}</div>}
       {inviteModal}
+      {daily && !showIntro && (
+        <div className="overlay" onClick={() => setDaily(null)}>
+          <div className="modal daily" onClick={(e) => e.stopPropagation()}>
+            <div className="streak-fire">🔥 {daily.streak}</div>
+            <h3>{daily.streak > 1 ? t('{0} днів поспіль!', daily.streak) : t('З поверненням!')}</h3>
+            <div className="streak-days">
+              {Array.from({ length: 7 }).map((_, i) => <span key={i} className={i < Math.min(daily.streak, 7) ? 'on' : ''}>{i + 1}</span>)}
+            </div>
+            <p className="plus big">+{daily.xp} XP</p>
+            {daily.item && <p>{t('🎁 Нагорода за тиждень: сорочка «Тижнева серія»!')}</p>}
+            <p className="hint">{t('Заходьте щодня — нагорода росте до 7-го дня. Пропуск дня обнуляє серію.')}</p>
+            <button className="btn primary" onClick={() => setDaily(null)}>{t('Забрати')}</button>
+          </div>
+        </div>
+      )}
       {online !== 'online' && <div className="offline">{t('Підключення…')}</div>}
     </div>
   );

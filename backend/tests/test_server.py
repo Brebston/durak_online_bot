@@ -355,3 +355,21 @@ def test_admin_bank_endpoint(client):
     r = client.get("/api/admin/bank?period=7d&tz=60", headers={"Authorization": "dev 1"})
     assert r.status_code == 200 and "game_net" in r.json() and "daily" in r.json()
     assert client.get("/api/admin/bank", headers={"Authorization": "dev 2"}).status_code == 403
+
+
+def test_withdrawals_disabled(client, tmp_path):
+    assert client.post("/api/withdrawals", json={"chips": 10}, headers={"Authorization": "dev 5"}).status_code in (404, 405)
+    from app.ledger import Ledger
+    db_file = tmp_path / "w.db"
+    db = DB(db_file)
+    L = Ledger(db)
+    db.upsert_user(77, "W", None)
+    L.post("u:77", 500, "deposit")
+    rid = db.ex("INSERT INTO withdrawal_requests(user_id,chips,stars,status,created_at) VALUES(77,300,30,'pending',0)")
+    L.hold("u:77", 300, f"withdrawal:{rid}")
+    assert L.available("u:77") == 200
+    main.init_state(str(db_file))
+    main.S.rooms.rng.uniform = lambda a, b: 0.0
+    main.S.rooms.speed = 0
+    assert main.S.ledger.available("u:77") == 500
+    assert main.S.db.one("SELECT status FROM withdrawal_requests WHERE id=?", (rid,))["status"] == "rejected"

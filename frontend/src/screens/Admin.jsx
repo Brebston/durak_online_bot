@@ -3,7 +3,7 @@ import { api, label } from '../api.js'
 import { Avatar, Chip } from '../Fx.jsx'
 import { t } from '../i18n.js'
 
-const SECTIONS = [['overview', t('Огляд')], ['balance', t('Баланси')], ['withdrawals', t('Виведення')], ['matches', t('Матчі')], ['tickets', t('Звернення')], ['modes', t('Режими')], ['audit', t('Аудит')]]
+const SECTIONS = [['overview', t('Огляд')], ['analytics', t('Аналітика')], ['alerts', t('Сигнали')], ['broadcast', t('Розсилка')], ['balance', t('Баланси')], ['matches', t('Матчі')], ['tickets', t('Звернення')], ['modes', t('Режими')], ['audit', t('Аудит')]]
 const ts = (sec) => new Date(sec * 1000).toLocaleString('uk-UA')
 
 // window.prompt не працює в деяких клієнтах Telegram — власне модальне вікно
@@ -38,8 +38,10 @@ export default function Admin({ me, toast, reloadMe }) {
         {SECTIONS.map(([id, n]) => <button key={id} className={sec === id ? 'on' : ''} onClick={() => setSec(id)}>{n}</button>)}
       </div>
       {sec === 'overview' && <Overview toast={toast} />}
+      {sec === 'analytics' && <Analytics toast={toast} />}
+      {sec === 'alerts' && <Alerts toast={toast} />}
+      {sec === 'broadcast' && <Broadcast toast={toast} />}
       {sec === 'balance' && <Balances toast={toast} reloadMe={reloadMe} />}
-      {sec === 'withdrawals' && <Withdrawals toast={toast} />}
       {sec === 'matches' && <Matches toast={toast} />}
       {sec === 'tickets' && <Tickets toast={toast} />}
       {sec === 'modes' && <Modes toast={toast} reloadMe={reloadMe} />}
@@ -155,71 +157,6 @@ function Overview({ toast }) {
         </ul>
       </section>
     </>
-  );
-}
-
-const WSTATUS = { pending: t('Очікує схвалення'), approved: t('Схвалено · чекає виплати'), completed: t('Виконано'), rejected: t('Відхилено') }
-function Withdrawals({ toast }) {
-  const [list, setList] = useState([])
-  const [filter, setFilter] = useState('open')
-  const load = useCallback(() => {
-    const status = filter
-    api(`/api/admin/withdrawals${status ? `?status=${status}` : ''}`).then((r) => setList(r.requests)).catch((e) => toast(e.message))
-  }, [filter, toast])
-  useEffect(() => {
-    load()
-    const timer = setInterval(load, 30000)
-    return () => clearInterval(timer)
-  }, [load])
-  const act = async (w, action, body = {}) => {
-    try {
-      await api(`/api/admin/withdrawals/${w.id}/${action}`, body)
-      toast(t('Заявку №{0} оновлено', w.id))
-      load()
-    } catch (e) { toast(e.message) }
-  }
-  const reject = async (w) => {
-    const reason = await ask(t('Причина відхилення заявки:'))
-    if (reason) await act(w, 'reject', { reason })
-  }
-  const complete = async (w) => {
-    const payout_reference = await ask(t('Підтвердження ручної виплати (наприклад, нотатка про подарунок Stars):'))
-    if (payout_reference) await act(w, 'complete', { payout_reference })
-  }
-  return (
-    <section className="card-box">
-      <div className="seg wrap">
-        {[['open', t('Відкриті')], ['pending', t('Очікують')], ['approved', t('Схвалені')], ['completed', t('Виконані')], ['rejected', t('Відхилені')]].map(([id, name]) =>
-          <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{name}</button>)}
-      </div>
-      <ul className="list">
-        {list.length === 0 && <li className="hint">{t('Заявок немає')}</li>}
-        {list.map((w) => (
-          <li key={w.id}>
-            <div><b>№{w.id} · {WSTATUS[w.status]}</b>
-              <small>{w.name} · Telegram ID: {w.user_id}{w.username ? ` · @${w.username}` : ''}</small>
-              <small>{ts(w.created_at)} · {w.chips}{' ' + t('фішок →') + ' '}{w.stars} ⭐
-                {w.eur_estimate != null ? t(' · оцінка €{0}', Number(w.eur_estimate).toFixed(2)) : ''}</small>
-              {w.decision_note && <small>{t('Причина:') + ' '}{w.decision_note}</small>}
-              {w.payout_reference && <small>{t('Підтвердження виплати:') + ' '}{w.payout_reference}</small>}
-            </div>
-            <div className="right">
-              {w.status === 'pending' && <>
-                <button className="btn small primary" onClick={() => act(w, 'approve')}>{t('Схвалити')}</button>
-                <button className="btn small warn" onClick={() => reject(w)}>{t('Відхилити')}</button>
-              </>}
-              {w.status === 'approved' && <>
-                <button className="btn small primary" onClick={() => complete(w)}>{t('Позначити виконаною')}</button>
-                <button className="btn small warn" onClick={() => reject(w)}>{t('Відхилити')}</button>
-              </>}
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="hint">{t(
-        'Після фактичного надсилання Stars позначте заявку виконаною та збережіть підтвердження.'
-      )}</p>
-    </section>
   );
 }
 
@@ -395,6 +332,10 @@ function Modes({ toast, reloadMe }) {
         free_games_per_day: parseInt(m.free_games_per_day, 10) || 0,
         bot_fill_seconds: parseInt(m.bot_fill_seconds, 10) || 0,
         bot_level: m.bot_level,
+        ranked: m.ranked, tournaments: m.tournaments,
+        tournament_wait: parseInt(m.tournament_wait, 10) || 180,
+        room_fill_seconds: parseInt(m.room_fill_seconds, 10) || 45,
+        alert_amount: parseInt(m.alert_amount, 10) || 0,
       }
       await api('/api/admin/modes', body)
       toast(t('Збережено')); reloadMe()
@@ -406,6 +347,11 @@ function Modes({ toast, reloadMe }) {
       <label className="toggle"><input type="checkbox" checked={m.free} onChange={set('free')} />{' ' + t('Безкоштовний режим')}</label>
       <label className="toggle"><input type="checkbox" checked={m.stake} onChange={set('stake')} />{' ' + t('Гра на фішки')}</label>
       <label className="toggle"><input type="checkbox" checked={m.bots} onChange={set('bots')} />{' ' + t('Боти')}</label>
+      <label className="toggle"><input type="checkbox" checked={m.ranked} onChange={set('ranked')} />{' ' + t('Рейтингові матчі')}</label>
+      <label className="toggle"><input type="checkbox" checked={m.tournaments} onChange={set('tournaments')} />{' ' + t('Турніри')}</label>
+      <h4>{t('Скільки секунд чекати гравців у турнірі після першої реєстрації')}</h4><input type="number" value={m.tournament_wait} onChange={set('tournament_wait')} />
+      <h4>{t('Через скільки секунд вільні місця у власній кімнаті займають боти')}</h4><input type="number" value={m.room_fill_seconds} onChange={set('room_fill_seconds')} />
+      <h4>{t('Сповіщати про операції від (фішок, 0 — ні)')}</h4><input type="number" value={m.alert_amount} onChange={set('alert_amount')} />
       <h4>{t('Ставки (через кому)')}</h4><input value={m.stakesText} onChange={set('stakesText')} />
       <h4>{t('Комісія, %')}</h4><input type="number" value={m.commission_percent} onChange={set('commission_percent')} />
       <h4>{t('Безкоштовних ігор на день (0 = без обмежень)')}</h4><input type="number" value={m.free_games_per_day} onChange={set('free_games_per_day')} />
@@ -433,4 +379,160 @@ function Audit({ toast }) {
       </ul>
     </section>
   );
+}
+
+function Bars({ rows, field, fmt }) {
+  const max = Math.max(1, ...rows.map((r) => r[field] || 0))
+  return (
+    <div className="bars">
+      {rows.map((r) => (
+        <div key={r.day} className="bar" title={`${r.day}: ${r[field] ?? '—'}`}>
+          <i style={{ height: `${(100 * (r[field] || 0)) / max}%` }} />
+          <small>{fmt ? fmt(r[field]) : r[field] ?? '—'}</small>
+          <em>{r.day.slice(8)}</em>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const KIND_NAME = { quick: t('Швидка гра'), private: t('Кімната'), rematch: t('Реванш'), tournament: t('Турнір') }
+const MODE_NAME = { free: t('Безкоштовно'), stake: t('На фішки'), ranked: t('Рейтингова') }
+
+function Analytics({ toast }) {
+  const [days, setDays] = useState(14)
+  const [a, setA] = useState(null)
+  useEffect(() => { setA(null); api(`/api/admin/analytics?days=${days}`).then(setA).catch((e) => toast(e.message)) }, [days, toast])
+  if (!a) return <div className="spinner" />
+  const today = a.series[a.series.length - 1]
+  const total = a.modes.reduce((x, m) => x + m.n, 0) || 1
+  return (
+    <>
+      <div className="seg">
+        {[[7, t('7 днів')], [14, t('14 днів')], [30, t('30 днів')]].map(([v, l]) => <button key={v} className={days === v ? 'on' : ''} onClick={() => setDays(v)}>{l}</button>)}
+      </div>
+      <section className="stats">
+        <div><b>{a.online}</b><span>{t('онлайн зараз')}</span></div>
+        <div><b>{today.dau}</b><span>{t('DAU сьогодні')}</span></div>
+        <div><b>{a.totals.wau}</b><span>{t('за 7 днів')}</span></div>
+        <div><b>{a.totals.users}</b><span>{t('усього')}</span></div>
+      </section>
+      <section className="card-box"><h3>{t('Активні гравці за день (DAU)')}</h3><Bars rows={a.series} field="dau" /></section>
+      <section className="card-box"><h3>{t('Нові гравці')}</h3><Bars rows={a.series} field="new" /></section>
+      <section className="card-box">
+        <h3>{t('Повернення наступного дня (D1), %')}</h3>
+        <Bars rows={a.series} field="d1" fmt={(v) => (v === null || v === undefined ? '—' : `${v}`)} />
+        <p className="hint">{t('Частка новачків дня, які зайшли ще раз наступного дня.')}</p>
+      </section>
+      <section className="card-box"><h3>{t('Матчів за день')}</h3><Bars rows={a.series} field="games" /></section>
+      <section className="card-box"><h3>{t('Куплено фішок за Stars')}</h3><Bars rows={a.series} field="chips_bought" /></section>
+      <section className="card-box">
+        <h3>{t('Популярні режими')}</h3>
+        <ul className="list">
+          {a.modes.length === 0 && <li className="hint">{t('Ще немає матчів')}</li>}
+          {a.modes.map((m, i) => (
+            <li key={i}>
+              <div>
+                <b>{MODE_NAME[m.mode] || m.mode} · {KIND_NAME[m.kind] || m.kind}</b>
+                <small>{m.variant === 'perevodnoy' ? t('Перевідний') : t('Підкидний')} · {m.size}{' ' + t('гравці')}</small>
+              </div>
+              <b>{m.n} · {Math.round((100 * m.n) / total)}%</b>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </>
+  )
+}
+
+function Alerts({ toast }) {
+  const [d, setD] = useState(null)
+  const load = useCallback(() => api('/api/admin/alerts').then(setD).catch((e) => toast(e.message)), [toast])
+  useEffect(() => { load() }, [load])
+  if (!d) return <div className="spinner" />
+  const seen = () => api('/api/admin/alerts/seen', {}).then(load).catch((e) => toast(e.message))
+  return (
+    <>
+      <section className="card-box">
+        <h3>{t('⚠️ Підозріле')}</h3>
+        <p className="hint">{t('Великі операції, багато переказів одному гравцю, часті скарги. Нові сигнали також приходять адмінам у бот.')}</p>
+        <ul className="list">
+          {d.alerts.length === 0 && <li className="hint">{t('Поки все спокійно')}</li>}
+          {d.alerts.map((a) => (
+            <li key={a.id} className={a.seen ? '' : 'unseen'}><div><b>{t(a.text)}</b><small>{ts(a.created_at)}</small></div></li>
+          ))}
+        </ul>
+        <button className="btn" onClick={seen}>{t('Позначити переглянутими')}</button>
+      </section>
+      <section className="card-box">
+        <h3>{t('🚩 Скарги гравців')}</h3>
+        <ul className="list">
+          {d.reports.length === 0 && <li className="hint">{t('Скарг немає')}</li>}
+          {d.reports.map((r) => (
+            <li key={r.id} className={r.status === 'open' ? 'unseen' : ''}>
+              <div>
+                <b>{r.target_name || r.target_id} ({r.target_id})</b>
+                <small>{t(r.reason)} · {t('від') + ' '}{r.from_name || r.from_id} · {ts(r.created_at)}{r.match_id ? ` · №${r.match_id}` : ''}</small>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </>
+  )
+}
+
+function Broadcast({ toast }) {
+  const [text, setText] = useState('')
+  const [button, setButton] = useState(t('🃏 Грати'))
+  const [st, setSt] = useState(null)
+  const [backup, setBackup] = useState(null)
+  const [armed, setArmed] = useState(false)
+  const load = useCallback(() => api('/api/admin/broadcast').then(setSt).catch((e) => toast(e.message)), [toast])
+  useEffect(() => {
+    load()
+    api('/api/admin/alerts').then((d) => setBackup(d.last_backup)).catch(() => {})
+    const timer = setInterval(load, 3000)
+    return () => clearInterval(timer)
+  }, [load])
+  const go = async (test) => {
+    if (!test && !armed) { setArmed(true); return }
+    setArmed(false)
+    try {
+      await api('/api/admin/broadcast', { text, button, test })
+      toast(test ? t('Тестове повідомлення надіслано вам у бот') : t('Розсилку запущено'))
+      load()
+    } catch (e) { toast(e.message) }
+  }
+  const doBackup = async () => {
+    try {
+      const r = await api('/api/admin/backup', {})
+      toast(t('Бекап {0} КБ надіслано в бот', Math.round(r.size / 1024)))
+      setBackup(Date.now() / 1000)
+    } catch (e) { toast(e.message) }
+  }
+  return (
+    <>
+      <section className="card-box">
+        <h3>{t('📣 Розсилка в боті')}</h3>
+        <p className="hint">{t('Отримають лише ті, хто не вимкнув сповіщення:') + ' '}<b>{st?.recipients ?? '…'}</b></p>
+        <textarea value={text} maxLength={3500} onChange={(e) => setText(e.target.value)} placeholder={t('Текст повідомлення')} />
+        <h4>{t('Текст кнопки')}</h4>
+        <input value={button} maxLength={40} onChange={(e) => setButton(e.target.value)} />
+        <div className="actions-col">
+          <button className="btn" disabled={!text.trim() || !st?.bot} onClick={() => go(true)}>{t('Надіслати тест собі')}</button>
+          <button className="btn primary" disabled={!text.trim() || !st?.bot || st?.running} onClick={() => go(false)}>{armed ? t('Точно надіслати {0} гравцям?', st?.recipients) : t('Надіслати всім')}</button>
+        </div>
+        {st && !st.bot && <p className="hint warn">{t('Бот не запущений — розсилка недоступна.')}</p>}
+        {st?.total !== undefined && (
+          <p className="hint">{st.running ? t('Йде розсилка:') : t('Остання розсилка:')}{' '}{st.sent}/{st.total}{st.failed ? ` · ${t('не доставлено')} ${st.failed}` : ''}</p>
+        )}
+      </section>
+      <section className="card-box">
+        <h3>{t('💾 Бекап бази')}</h3>
+        <p className="hint">{t('Щодня база автоматично надсилається адмінам у бот файлом .db.gz.') + ' '}{backup ? t('Останній: {0}', ts(backup)) : t('Ще не було')}</p>
+        <button className="btn" onClick={doBackup}>{t('Зробити бекап зараз')}</button>
+      </section>
+    </>
+  )
 }

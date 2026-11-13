@@ -27,7 +27,7 @@ log = logging.getLogger("bot")
 TERMS = (
     "💳 <b>Умови оплати</b>\n"
     "• Фішки купуються за Telegram Stars: 1 ⭐ = {rate} фішок.\n"
-    "• Можна подати заявку на ручну виплату фішок у Stars. Вона потребує схвалення адміністратора; виплата не автоматична.\n"
+    "• Фішки — ігрова валюта лише для цієї гри: вони не виводяться і не обмінюються на гроші чи Stars.\n"
     "• У грі на фішки ставка резервується до старту матчу. «Дурень» віддає ставку, решта гравців ділять її порівну"
     " (комісія — {fee}%). Нічия або скасований матч — резерв повертається.\n"
     "• Повернення Stars за невикористані фішки — через /paysupport."
@@ -78,11 +78,22 @@ class TgBot:
         except Exception:  # noqa: BLE001
             log.info("cannot notify %s", uid)
 
+    async def notify_text(self, uid: int, key: str) -> None:
+        """Коротке сповіщення з кнопкою «Грати» (якщо гравець не вимкнув сповіщення). key — ключ bot_i18n."""
+        u = self.db.user(uid)
+        if not u or not u["notify"]:
+            return
+        lang = pick_lang(u.get("lang"), None)
+        try:
+            await self.bot.send_message(uid, bt(lang, key), reply_markup=self.webapp_button(bt(lang, "play")))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify %s", uid)
+
     async def create_invoice(self, uid: int, stars: int) -> str:
         chips = stars * settings.stars_to_chips
         return await self.bot.create_invoice_link(
             title=f"{chips} фішок",
-            description="Ігрові фішки для «Дурак онлайн».",
+            description="Ігрові фішки для «Дурак онлайн». Не виводяться і не обмінюються на гроші.",
             payload=f"chips:{uid}:{stars}:{int(time.time())}",
             currency="XTR",
             prices=[LabeledPrice(label=f"{chips} фішок", amount=stars)],

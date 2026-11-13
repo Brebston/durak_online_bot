@@ -147,6 +147,107 @@ CREATE TABLE IF NOT EXISTS avatars (
     data BLOB NOT NULL,
     updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS user_stats (
+    user_id INTEGER PRIMARY KEY,
+    games INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    draws INTEGER NOT NULL DEFAULT 0,
+    transfers INTEGER NOT NULL DEFAULT 0,
+    catches INTEGER NOT NULL DEFAULT 0,
+    trump_defends INTEGER NOT NULL DEFAULT 0,
+    throw_ins INTEGER NOT NULL DEFAULT 0,
+    no_take_wins INTEGER NOT NULL DEFAULT 0,
+    four_wins INTEGER NOT NULL DEFAULT 0,
+    ranked_wins INTEGER NOT NULL DEFAULT 0,
+    tournament_wins INTEGER NOT NULL DEFAULT 0,
+    win_streak INTEGER NOT NULL DEFAULT 0,
+    best_win_streak INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS quests (
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    qid TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    reward INTEGER NOT NULL,
+    done_at INTEGER,
+    PRIMARY KEY (user_id, day, qid)
+);
+CREATE TABLE IF NOT EXISTS user_achievements (
+    user_id INTEGER NOT NULL,
+    ach_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, ach_id)
+);
+CREATE TABLE IF NOT EXISTS user_titles (
+    user_id INTEGER NOT NULL,
+    title_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, title_id)
+);
+CREATE TABLE IF NOT EXISTS match_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    points INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mp_time ON match_points(created_at, user_id);
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    match_id TEXT,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS reports_target ON reports(target_id, created_at);
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    target TEXT,
+    text TEXT NOT NULL,
+    dedupe TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tournaments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    rules TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'registering',
+    round INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    starts_at INTEGER,
+    finished_at INTEGER,
+    winner_slot INTEGER,
+    auto INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS tournament_players (
+    tid INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    user_id INTEGER,
+    name TEXT NOT NULL,
+    level TEXT,
+    back TEXT,
+    lvl INTEGER NOT NULL DEFAULT 1,
+    out_round INTEGER,
+    PRIMARY KEY (tid, slot)
+);
+CREATE TABLE IF NOT EXISTS tournament_matches (
+    tid INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    idx INTEGER NOT NULL,
+    a_slot INTEGER NOT NULL,
+    b_slot INTEGER NOT NULL,
+    winner_slot INTEGER,
+    match_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    PRIMARY KEY (tid, round, idx)
+);
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -177,9 +278,18 @@ class DB:
             ("avatar", "TEXT"),
             ("avatar_ver", "INTEGER NOT NULL DEFAULT 0"),
             ("tg_photo", "TEXT"),
+            ("rating", "INTEGER NOT NULL DEFAULT 1000"),
+            ("ranked_games", "INTEGER NOT NULL DEFAULT 0"),
+            ("streak", "INTEGER NOT NULL DEFAULT 0"),
+            ("best_streak", "INTEGER NOT NULL DEFAULT 0"),
+            ("streak_day", "TEXT"),
+            ("title", "TEXT"),
         ):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
+        mcols = {r["name"] for r in self.q("PRAGMA table_info(matches)")}
+        if "kind" not in mcols:
+            self.conn.execute("ALTER TABLE matches ADD COLUMN kind TEXT")
 
     @contextmanager
     def tx(self):

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { lang, LANGS, setLang, t } from '../i18n.js'
+import { lang, LANGS, setLang, t, titleText } from '../i18n.js'
 import { Avatar } from '../Fx.jsx'
+import { ACH_ICON } from './PlayerCard.jsx'
 
 const OUT = { win: [t('Перемога'), 'plus'], loss: [t('Дурень'), 'minus'], draw: [t('Нічия'), ''], cancelled: [t('Скасовано'), ''], playing: [t('Триває'), ''] }
 const KIND = {
@@ -14,7 +15,10 @@ export default function Profile({ me, reload, toast }) {
   const [hist, setHist] = useState(null)
   const [view, setView] = useState('matches')
   const [ticket, setTicket] = useState('')
+  const [prog, setProg] = useState(null)
   useEffect(() => { api('/api/history').then(setHist).catch((e) => toast(e.message)) }, [toast])
+  useEffect(() => { api('/api/progress').then(setProg).catch(() => {}) }, [me.progress.xp])
+  const pickTitle = (id) => api('/api/title', { title_id: id }).then(() => { reload(); api('/api/progress').then(setProg) }).catch((e) => toast(e.message))
   const st = me.stats
   const rate = st.played ? Math.round((st.wins / st.played) * 100) : 0
 
@@ -89,6 +93,45 @@ export default function Profile({ me, reload, toast }) {
         <div><b>{rate}%</b><span>{t('вінрейт')}</span></div>
       </section>
 
+      {prog && (
+        <section className="card-box progress-box">
+          <div className="terms">
+            <div><span>{t('📈 Рейтинг')}</span><b>{prog.rating.value}</b></div>
+            <div><span>{t('🔥 Серія днів')}</span><b>{prog.streak.days} ({t('рекорд') + ' '}{prog.streak.best})</b></div>
+          </div>
+          {prog.titles.length > 0 && (
+            <>
+              <h4>{t('Титул')}</h4>
+              <select value={prog.titles.find((x) => x.label === prog.title)?.title_id || ''} onChange={(e) => pickTitle(e.target.value)}>
+                <option value="">{t('— без титулу —')}</option>
+                {prog.titles.map((x) => <option key={x.title_id} value={x.title_id}>{titleText(x.label)}</option>)}
+              </select>
+            </>
+          )}
+          <h4>{t('Завдання на сьогодні')}</h4>
+          <ul className="quests">
+            {prog.quests.map((q) => (
+              <li key={q.qid} className={q.done ? 'done' : ''}>
+                <div>
+                  <span>{q.done ? '✅ ' : ''}{t(q.text, q.target)}</span>
+                  <div className="xpbar"><i style={{ width: `${(100 * q.progress) / q.target}%` }} /></div>
+                </div>
+                <small>{q.progress}/{q.target} · +{q.reward} XP</small>
+              </li>
+            ))}
+          </ul>
+          <h4>{t('Досягнення')} · {prog.achievements.filter((a) => a.unlocked).length}/{prog.achievements.length}</h4>
+          <div className="badges">
+            {prog.achievements.map((a) => (
+              <div key={a.id} className={`ach ${a.unlocked ? 'on' : ''}`} onClick={() => toast(`${t(a.name)} — ${t(a.desc)} (${a.progress}/${a.target})`)}>
+                <span>{ACH_ICON[a.id] || '⭐'}</span>
+                <small>{t(a.name)}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="card-box">
         <div className="seg">
           <button className={view === 'matches' ? 'on' : ''} onClick={() => setView('matches')}>{t('Матчі')}</button>
@@ -157,7 +200,7 @@ export default function Profile({ me, reload, toast }) {
         <details>
           <summary>{t('Умови оплати')}</summary>
           <p>{t('Фішки купуються за Telegram Stars (1 ⭐ =') + ' '}{me.shop.rate}{' ' + t(
-            'фішок). Фішки є балансом гри. Подати заявку на ручну виплату в Stars можна у вкладці «Вивід»; виплата потребує схвалення адміністратора і виконується вручну. Ставка резервується до старту. «Дурень» віддає ставку, решта ділять її порівну, комісія'
+            'фішок). Фішки — ігрова валюта лише для цієї гри: вони не виводяться і не обмінюються на гроші чи Stars. Ставка резервується до старту. «Дурень» віддає ставку, решта ділять її порівну, комісія'
           ) + ' '}{me.modes.commission_percent}{t(
             '%. Нічия чи скасований матч — резерв повертається. Повернення Stars за невикористані фішки — через /paysupport у боті.'
           )}</p>

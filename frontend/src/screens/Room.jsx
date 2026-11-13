@@ -5,6 +5,7 @@ import { sfx } from '../sounds.js'
 import { inside, nearestPairs, resolveDrop } from '../dnd.js'
 import { Avatar, Victory } from '../Fx.jsx'
 import { t } from '../i18n.js'
+import PlayerCard from './PlayerCard.jsx'
 
 const RANKS = { 11: t('В'), 12: t('Д'), 13: t('К'), 14: t('Т') }
 
@@ -44,7 +45,7 @@ export default function Room({ data, me, send, onExit, onAgain, toast }) {
   const serverNow = now + offset
   if (room.status === 'waiting') return <Waiting room={room} send={send} onExit={onExit} me={me} serverNow={serverNow} toast={toast} />
   const left = Math.min(room.rules.turn_seconds * 1000, Math.max(0, room.deadline * 1000 - serverNow))
-  return <Table data={data} me={me} send={send} left={left} onExit={onExit} onAgain={onAgain} serverNow={serverNow} />
+  return <Table data={data} me={me} send={send} left={left} onExit={onExit} onAgain={onAgain} serverNow={serverNow} toast={toast} />
 }
 
 // ======================= Очікування =======================
@@ -53,7 +54,7 @@ function Waiting({ room, send, onExit, me, serverNow }) {
   const [invited, setInvited] = useState({})
   const free = room.size - room.seats.length
   const quick = !room.private
-  const fillIn = room.fill_at ? Math.max(0, Math.ceil((room.fill_at * 1000 - serverNow) / 1000)) : null
+  const fillIn = room.fill_at && room.status === 'waiting' ? Math.max(0, Math.ceil((room.fill_at * 1000 - serverNow) / 1000)) : null
 
   useEffect(() => { api('/api/friends').then(setFriends).catch(() => setFriends({ friends: [] })) }, [])
 
@@ -85,6 +86,9 @@ function Waiting({ room, send, onExit, me, serverNow }) {
               <b>{t('Шукаємо гравців…')}</b>
               {fillIn !== null && <small className="hint">{t('гра почнеться не пізніше ніж за') + ' '}{fillIn}{' ' + t('с')}</small>}
             </div>
+          )}
+          {!quick && fillIn !== null && free > 0 && (
+            <p className="hint">{t('Якщо друзі не прийдуть, за {0} с вільні місця займуть інші гравці.', fillIn)}</p>
           )}
           <h3>{room.rules.variant === 'perevodnoy' ? t('Перевідний') : t('Підкидний')} · {room.size}{' ' + t('гравці ·') + ' '}{room.rules.deck_size}{' ' + t('карт')}{room.rules.cheating ? t(' · 🃏 Шулер') : ''}</h3>
           {room.mode === 'stake' ? (
@@ -121,16 +125,6 @@ function Waiting({ room, send, onExit, me, serverNow }) {
           </ul>
           <button className="btn" onClick={share}>{t('Поділитися посиланням')}</button>
         </section>
-
-        {!quick && room.owner && (
-          <section className="card-box">
-            <h3>{t('Додати ботів на вільні місця')}</h3>
-            <div className="actions-col">
-              <button className="btn primary" onClick={() => send({ type: 'add_bots', room: room.id, level: 'hard' })}>{t('Заповнити ботами (')}{free})
-              </button>
-            </div>
-          </section>
-        )}
 
         <section className="card-box">
           <h3>{t('Чат кімнати')}</h3>
@@ -187,7 +181,8 @@ function statusText(game, myId) {
   return acts.some((a) => a.type === 'pass') ? t('Підкиньте або «Бито»') : t('Можна підкинути');
 }
 
-function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
+function Table({ data, me, send, left, onExit, onAgain, serverNow, toast }) {
+  const [cardOf, setCardOf] = useState(null)
   const { room, game, result, last } = data
   const [sel, setSel] = useState(null)
   const [confirmExit, setConfirmExit] = useState(false)
@@ -241,7 +236,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
   useEffect(() => { sfx.play('deal') }, [room.match_id])
   useEffect(() => {
     if (game.status !== 'finished' || !result || result.cancelled) return
-    sfx.play(result.draw || result.loser !== myId ? 'win' : 'lose')
+    sfx.play(result.draw ? 'tie' : result.loser !== myId ? 'win' : 'lose')
   }, [game.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- анімації: прилітання карт і змітання столу ----------
@@ -264,7 +259,9 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
     const was = new Set(prevShown.current.flat().filter(Boolean))
     const nowCards = shown.flat().filter(Boolean)
     // нові карти на столі прилітають від того, хто їх кинув
-    if (nowCards.some((c) => !was.has(c))) sfx.play('card')
+    // відбилися — «ляп» поверх карти; підкинули до наявних — легкий кидок; перша карта відбою — звичайний
+    const fresh = shown.flatMap((pair, i) => pair.map((c, j) => (c && !was.has(c) ? j : -1))).filter((j) => j >= 0)
+    if (fresh.length) sfx.play(fresh.includes(1) ? 'defend' : was.size ? 'throw' : 'card')
     for (const c of nowCards) {
       if (was.has(c)) continue
       const el = tableRef.current?.querySelector(`[data-card="${c}"]`)
@@ -325,7 +322,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
     setCatchMsg(last.caught
       ? { ok: true, text: last.cheater === myId ? t('Вас спіймали на мухлюванні!') : t('{0} спіймав мухляра: {1}', who, cheater) }
       : { ok: false, text: last.player === myId ? t('Мухлювання не було') : t('{0}: хибна тривога', who) })
-    if (last.caught) { haptic('heavy'); sfx.play('take') }
+    if (last.caught) { haptic('heavy'); sfx.play('catch') }
     const timer = setTimeout(() => setCatchMsg(null), 2200)
     return () => clearTimeout(timer)
   }, [last?.n]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -468,7 +465,11 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
         const maxDelay = Math.max(...flights.map((f) => f.delay))
         setTimeout(() => setDraws(null), maxDelay + 600)
       }
-      if (mineNew.length || flights.length) setTimeout(() => sfx.play('deal'), delay0)
+      if (!firstDeal) {
+        // кожна карта з колоди — окремий тихий «шурх» у такт анімації
+        const times = [...mineNew.map((_, i) => delay0 + i * 110), ...flights.map((f) => f.delay)].sort((a, b) => a - b).slice(0, 10)
+        times.forEach((ms) => sfx.play('draw', ms / 1000))
+      }
     }
     prevHand.current = new Set(game.hand)
     prevCounts.current = Object.fromEntries(game.players.map((p) => [p.id, p.cards]))
@@ -499,7 +500,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
             <div key={p.id} data-pid={p.id} className={`opp ${waiting ? 'turn' : ''} ${p.out ? 'out' : ''}`}>
               {bubbles[p.id] && <div className="bubble">{bubbles[p.id].emoji || bubbles[p.id].text}</div>}
               <div className="opp-head">
-                <div className="opp-ava"><Avatar url={s.avatar} name={s.name} size={30} /><span className="lvl">{s.lvl}</span></div>
+                <div className="opp-ava" onClick={() => setCardOf(s)}><Avatar url={s.avatar} name={s.name} size={30} /><span className="lvl">{s.lvl}</span></div>
                 <div className="opp-name">{s.bot ? ' ' : ''}{s.name}</div>
               </div>
               <Backs n={p.cards} back={s.back} />
@@ -615,12 +616,14 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow }) {
       )}
 
       {!playing && won && <Victory id={me.cosmetics?.victory || 'victory_stars'} />}
-      {!playing && result && <ResultModal result={result} myId={myId} names={names} onExit={onExit} onAgain={onAgain} room={room} />}
+      {!playing && result && !cardOf && <ResultModal result={result} myId={myId} names={names} onExit={onExit} onAgain={onAgain} room={room} send={send} />}
+      {cardOf && <PlayerCard seat={cardOf} matchId={room.match_id} onClose={() => setCardOf(null)} toast={toast} />}
     </div>
   );
 }
 
-function ResultModal({ result, myId, names, onExit, onAgain, room }) {
+function ResultModal({ result, myId, names, onExit, onAgain, room, send }) {
+  const [asked, setAsked] = useState(false)
   if (result.cancelled) {
     return (
       <div className="overlay"><div className="modal">
@@ -638,9 +641,21 @@ function ResultModal({ result, myId, names, onExit, onAgain, room }) {
         {!result.draw && !lost && <p>{t('Дурень:') + ' '}{names[result.loser]?.name}</p>}
         {result.surrendered && <p className="hint">{names[result.surrendered]?.name}{' ' + t('здався')}</p>}
         {delta !== undefined && <p className={delta >= 0 ? 'plus big' : 'minus big'}>{delta >= 0 ? '+' : ''}{delta} <Chip /></p>}
+        {room.ranked && <p className="hint">{t('Рейтингова гра — рейтинг оновлено')}</p>}
         <p className="hint">{t('Матч') + ' '}{room.match_id}</p>
         <div className="actions-col">
-          <button className="btn primary" onClick={onAgain}>{t('Ще раз')}</button>
+          {room.tournament ? (
+            <button className="btn primary" onClick={onExit}>{t('До турніру')}</button>
+          ) : (
+            <>
+              <button className="btn primary" disabled={asked}
+                onClick={() => { setAsked(true); send({ type: 'rematch', room: room.id }) }}>
+                {asked ? t('Чекаємо суперників…') : t('🔁 Реванш')}
+              </button>
+              {room.rematch?.length > 0 && <p className="hint">{t('За реванш:') + ' '}{room.rematch.join(', ')}</p>}
+              <button className="btn" onClick={onAgain}>{t('Нова гра')}</button>
+            </>
+          )}
           <button className="btn" onClick={onExit}>{t('В меню')}</button>
         </div>
       </div>

@@ -29,6 +29,10 @@ CATALOG: list[dict] = [
     {"id": "back_bronze", "type": "back", "name": "Бронзова", "price": 0, "level": 5},
     {"id": "back_silver", "type": "back", "name": "Срібна", "price": 0, "level": 10},
     {"id": "back_gold", "type": "back", "name": "Золота", "price": 0, "level": 20},
+    # нагороди (не продаються): серія днів, турнір, сезон
+    {"id": "back_streak", "type": "back", "name": "Тижнева серія", "price": 0, "award": "streak"},
+    {"id": "back_champion", "type": "back", "name": "Чемпіонська", "price": 0, "award": "tournament"},
+    {"id": "back_season", "type": "back", "name": "Сезонна", "price": 0, "award": "season"},
     # ---- столи ----
     {"id": "table_green", "type": "table", "name": "Зелене сукно", "price": 0},
     {"id": "table_blue", "type": "table", "name": "Синє сукно", "price": 150},
@@ -83,7 +87,7 @@ class Shop:
 
         u = self.db.user(uid)
         lvl = level_of(int(u.get("xp") or 0)) if u else 1
-        free = {i["id"] for i in CATALOG if i["price"] == 0 and lvl >= i.get("level", 0)}
+        free = {i["id"] for i in CATALOG if i["price"] == 0 and not i.get("award") and lvl >= i.get("level", 0)}
         rows = self.db.q("SELECT item_id FROM inventory WHERE user_id=?", (uid,))
         return free | {r["item_id"] for r in rows}
 
@@ -109,6 +113,8 @@ class Shop:
             raise ShopError("Вже придбано")
         if item.get("level"):
             raise ShopError("Відкривається на рівні {0}", item["level"])
+        if item.get("award"):
+            raise ShopError("Цю сорочку можна лише виграти")
         try:
             # фішки за покупки йдуть у банк гри
             ok = self.ledger.transfer(acc(uid), BANK, item["price"], "shop_purchase", ref=item_id,

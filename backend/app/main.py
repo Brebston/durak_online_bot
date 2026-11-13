@@ -118,18 +118,9 @@ def recover_after_restart() -> None:
     for m in stale:
         S.db.ex("UPDATE matches SET status='cancelled', finished_at=?, result=? WHERE id=?",
                 (int(time.time()), reason, m["id"]))
-    held = S.db.one("SELECT COUNT(*) n FROM holds WHERE status='active'")["n"]
-    S.db.ex("UPDATE holds SET status='released' WHERE status='active'")
-    # вивід фішок у Stars вимкнено: незавершені заявки скасовуються, зарезервовані фішки повертаються гравцям
-    try:
-        open_w = S.db.q("SELECT id FROM withdrawal_requests WHERE status IN ('pending','approved')")
-    except Exception:  # noqa: BLE001
-        open_w = []
-    for w in open_w:
-        S.db.ex("UPDATE withdrawal_requests SET status='rejected', decided_at=?, decision_note=? WHERE id=?",
-                (int(time.time()), "Вивід фішок вимкнено — фішки повернуто на баланс", w["id"]))
-    if open_w:
-        S.db.audit(None, "withdrawals_disabled", None, {"cancelled_requests": len(open_w)})
+    held = S.db.one("SELECT COUNT(*) n FROM holds WHERE status='active' AND room_id NOT LIKE 'withdrawal:%'")["n"]
+    # Кімнати зникають після перезапуску, але резерви активних заявок на Stars мають зберегтися.
+    S.db.ex("UPDATE holds SET status='released' WHERE status='active' AND room_id NOT LIKE 'withdrawal:%'")
     if stale or held:
         S.db.audit(None, "restart_recovery", None, {"matches": len(stale), "holds": held})
         log.warning("Після перезапуску скасовано матчів: %s, повернуто резервів: %s", len(stale), held)
@@ -305,6 +296,10 @@ async def me(user: dict = Depends(current_user)):
         "verification": "not_required",
         "modes": modes,
         "shop": {"rate": settings.stars_to_chips, "packs": settings.star_packs, "enabled": bool(S.tg) or dev_auth_allowed()},
+        "withdrawal": {
+            "stars_per_chips": settings.stars_to_chips,
+            "eur_per_star": settings.withdrawal_eur_per_star if settings.withdrawal_eur_per_star > 0 else None,
+        },
         "room": room.id if room else None,
     }
 
@@ -585,6 +580,50 @@ async def support(body: TicketIn, user: dict = Depends(current_user)):
     return {"id": tid}
 
 
+def withdrawal_public(row: dict) -> dict:
+    return {k: row[k] for k in (
+        "id", "chips", "stars", "eur_estimate", "status", "created_at", "decided_at",
+        "completed_at", "decision_note", "payout_reference",
+    )}
+
+
+@app.get("/api/withdrawals")
+async def withdrawals(user: dict = Depends(current_user)):
+    rows = S.db.q("SELECT * FROM withdrawal_requests WHERE user_id=? ORDER BY id DESC LIMIT 30", (user["id"],))
+    return {"requests": [withdrawal_public(r) for r in rows]}
+
+
+class WithdrawalIn(BaseModel):
+    chips: int
+
+
+@app.post("/api/withdrawals")
+async def create_withdrawal(body: WithdrawalIn, user: dict = Depends(current_user)):
+    if user["banned"]:
+        raise HTTPException(403, "Обліковий запис заблоковано")
+    rate = settings.stars_to_chips
+    if body.chips <= 0 or body.chips > 1_000_000_000 or rate <= 0 or body.chips % rate:
+        raise HTTPException(400, f"Сума має бути додатною і кратною {rate} фішкам")
+    stars = body.chips // rate
+    estimate = stars * settings.withdrawal_eur_per_star if settings.withdrawal_eur_per_star > 0 else None
+    try:
+        request_id = S.ledger.create_withdrawal_request(user["id"], body.chips, stars, estimate)
+    except LedgerError as e:
+        raise HTTPException(400, str(e))
+    if S.tg:
+        for admin_id in settings.admin_ids:
+            try:
+                await S.tg.bot.send_message(
+                    admin_id,
+                    f"Нова заявка на виведення №{request_id}: {body.chips} фішок → {stars} ⭐ "
+                    f"від {user['name']} (Telegram ID {user['id']}).",
+                )
+            except Exception:  # noqa: BLE001
+                log.info("cannot notify admin %s about withdrawal %s", admin_id, request_id)
+    return {"id": request_id, "chips": body.chips, "stars": stars,
+            "eur_estimate": estimate, "status": "pending"}
+
+
 
 
 @app.get("/api/lobby")
@@ -633,6 +672,132 @@ async def stars_overview() -> dict:
             bot_balance = None
     return {"paid_total": paid, "refunds": len(refunds), "bot_balance": bot_balance,
             "withdraw_hint": "Виведення Stars бота (для власника): профіль бота в Telegram → Balance/Stars → Withdraw через Fragment (у TON)."}
+
+
+@app.get("/api/admin/withdrawals")
+async def admin_withdrawals(status: str = "", admin: dict = Depends(admin_user)):
+    if status and status not in ("open", "pending", "approved", "completed", "rejected"):
+        raise HTTPException(400, "Невідомий статус")
+    if status == "open":
+        where, args = "WHERE w.status IN ('pending','approved')", ()
+    else:
+        where = "WHERE w.status=?" if status else ""
+        args = (status,) if status else ()
+    rows = S.db.q(
+        "SELECT w.*, u.name, u.username FROM withdrawal_requests w JOIN users u ON u.id=w.user_id "
+        f"{where} ORDER BY CASE w.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, w.id DESC LIMIT 200",
+        args,
+    )
+    return {"requests": rows}
+
+
+def audit_withdrawal(conn, admin_id: int, action: str, request: dict, data: dict | None = None) -> None:
+    payload = {"user_id": request["user_id"], "chips": request["chips"], "stars": request["stars"], **(data or {})}
+    conn.execute(
+        "INSERT INTO audit(ts,admin_id,action,target,data) VALUES(?,?,?,?,?)",
+        (int(time.time()), admin_id, action, str(request["id"]), json.dumps(payload, ensure_ascii=False)),
+    )
+
+
+@app.post("/api/admin/withdrawals/{request_id}/approve")
+async def approve_withdrawal(request_id: int, admin: dict = Depends(admin_user)):
+    with S.db.tx() as conn:
+        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Заявку не знайдено")
+        if row["status"] != "pending":
+            raise HTTPException(409, "Схвалити можна лише заявку зі статусом «очікує»")
+        hold = conn.execute(
+            "SELECT amount FROM holds WHERE account=? AND room_id=? AND status='active'",
+            (acc(row["user_id"]), f"withdrawal:{request_id}"),
+        ).fetchone()
+        if not hold or hold["amount"] != row["chips"]:
+            raise HTTPException(409, "Резерв заявки не знайдено")
+        conn.execute(
+            "UPDATE withdrawal_requests SET status='approved', decided_at=?, decided_by=? WHERE id=? AND status='pending'",
+            (int(time.time()), admin["id"], request_id),
+        )
+        request = dict(row)
+        audit_withdrawal(conn, admin["id"], "withdrawal_approved", request)
+    if S.tg:
+        try:
+            lang = pick_lang(S.db.user(row["user_id"]).get("lang"), None)
+            await S.tg.bot.send_message(row["user_id"], bt(lang, "withdrawal_approved", stars=row["stars"]))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify withdrawal user %s", row["user_id"])
+    return {"ok": True, "status": "approved"}
+
+
+class RejectWithdrawalIn(BaseModel):
+    reason: str
+
+
+@app.post("/api/admin/withdrawals/{request_id}/reject")
+async def reject_withdrawal(request_id: int, body: RejectWithdrawalIn, admin: dict = Depends(admin_user)):
+    reason = body.reason.strip()[:500]
+    if len(reason) < 3:
+        raise HTTPException(400, "Вкажіть причину відхилення")
+    with S.db.tx() as conn:
+        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Заявку не знайдено")
+        if row["status"] not in ("pending", "approved"):
+            raise HTTPException(409, "Цю заявку вже закрито")
+        conn.execute(
+            "UPDATE withdrawal_requests SET status='rejected', decided_at=?, decided_by=?, decision_note=? "
+            "WHERE id=? AND status IN ('pending','approved')",
+            (int(time.time()), admin["id"], reason, request_id),
+        )
+        conn.execute("UPDATE holds SET status='released' WHERE room_id=? AND status='active'",
+                     (f"withdrawal:{request_id}",))
+        request = dict(row)
+        audit_withdrawal(conn, admin["id"], "withdrawal_rejected", request, {"reason": reason})
+    if S.tg:
+        try:
+            lang = pick_lang(S.db.user(row["user_id"]).get("lang"), None)
+            await S.tg.bot.send_message(
+                row["user_id"], bt(lang, "withdrawal_rejected", stars=row["stars"], reason=reason))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify withdrawal user %s", row["user_id"])
+    await send_to_user(row["user_id"], {"type": "balance"})
+    return {"ok": True, "status": "rejected"}
+
+
+class CompleteWithdrawalIn(BaseModel):
+    payout_reference: str
+
+
+@app.post("/api/admin/withdrawals/{request_id}/complete")
+async def complete_withdrawal(request_id: int, body: CompleteWithdrawalIn, admin: dict = Depends(admin_user)):
+    reference = body.payout_reference.strip()[:500]
+    if len(reference) < 3:
+        raise HTTPException(400, "Вкажіть підтвердження ручної виплати")
+    with S.db.tx() as conn:
+        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Заявку не знайдено")
+        if row["status"] != "approved":
+            raise HTTPException(409, "Виконати можна лише схвалену заявку")
+        request = dict(row)
+        try:
+            S.ledger.complete_withdrawal(conn, request, admin["id"], reference)
+        except LedgerError as e:
+            raise HTTPException(409, str(e))
+        conn.execute(
+            "UPDATE withdrawal_requests SET status='completed', completed_at=?, completed_by=?, payout_reference=? "
+            "WHERE id=? AND status='approved'",
+            (int(time.time()), admin["id"], reference, request_id),
+        )
+        audit_withdrawal(conn, admin["id"], "withdrawal_completed", request, {"payout_reference": reference})
+    if S.tg:
+        try:
+            lang = pick_lang(S.db.user(row["user_id"]).get("lang"), None)
+            await S.tg.bot.send_message(
+                row["user_id"], bt(lang, "withdrawal_completed", stars=row["stars"], id=request_id))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify withdrawal user %s", row["user_id"])
+    await send_to_user(row["user_id"], {"type": "balance"})
+    return {"ok": True, "status": "completed"}
 
 
 @app.get("/api/admin/bank")

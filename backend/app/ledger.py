@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 
@@ -117,6 +118,58 @@ class Ledger:
 
     def release_room(self, room_id: str) -> None:
         self.db.ex("UPDATE holds SET status='released' WHERE room_id=? AND status='active'", (room_id,))
+
+    def create_withdrawal_request(self, uid: int, chips: int, stars: int, eur_estimate: float | None) -> int:
+        """Create a pending Stars payout request and reserve chips atomically."""
+        if chips <= 0 or stars <= 0:
+            raise LedgerError("Сума має бути додатною")
+        account = acc(uid)
+        with self.db.tx() as conn:
+            if self.available(account, conn) < chips:
+                raise LedgerError("Недостатньо доступних фішок")
+            active = conn.execute(
+                "SELECT 1 FROM withdrawal_requests WHERE user_id=? AND status IN ('pending','approved') LIMIT 1",
+                (uid,),
+            ).fetchone()
+            if active:
+                raise LedgerError("У вас уже є активна заявка на виведення")
+            now = int(time.time())
+            cur = conn.execute(
+                "INSERT INTO withdrawal_requests(user_id,chips,stars,eur_estimate,status,created_at) "
+                "VALUES(?,?,?,?, 'pending',?)",
+                (uid, chips, stars, eur_estimate, now),
+            )
+            request_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO holds(account,amount,room_id,status,created_at) VALUES(?,?,?,'active',?)",
+                (account, chips, f"withdrawal:{request_id}", now),
+            )
+            conn.execute(
+                "INSERT INTO audit(ts,admin_id,action,target,data) VALUES(?,NULL,?,?,?)",
+                (now, "withdrawal_requested", str(request_id),
+                 json.dumps({"user_id": uid, "chips": chips, "stars": stars, "eur_estimate": eur_estimate}, ensure_ascii=False)),
+            )
+            return request_id
+
+    def complete_withdrawal(self, conn, request: dict, admin_id: int, payout_reference: str) -> None:
+        """Debit the reserved chips exactly once and settle their hold."""
+        rid = request["id"]
+        hold = conn.execute(
+            "SELECT id,amount FROM holds WHERE account=? AND room_id=? AND status='active'",
+            (acc(request["user_id"]), f"withdrawal:{rid}"),
+        ).fetchone()
+        if not hold or hold["amount"] != request["chips"]:
+            raise LedgerError("Резерв заявки не знайдено або його сума не збігається")
+        inserted = conn.execute(
+            "INSERT OR IGNORE INTO transactions(account,amount,kind,ref,reason,admin_id,idem,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (acc(request["user_id"]), -request["chips"], "withdrawal", str(rid),
+             f"Виплата {request['stars']} Stars; {payout_reference}", admin_id,
+             f"withdrawal:{rid}", int(time.time())),
+        )
+        if inserted.rowcount != 1:
+            raise LedgerError("Списання за цією заявкою вже проведене")
+        conn.execute("UPDATE holds SET status='settled' WHERE id=? AND status='active'", (hold["id"],))
 
     def settle(self, room_id: str, match_id: str, stake: int, loser: str | None,
                winners: list[str], commission_percent: float) -> dict:

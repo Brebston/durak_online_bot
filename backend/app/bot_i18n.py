@@ -56,6 +56,24 @@ TEXTS: dict[str, dict[str, str]] = {
         "pl": "🎁 {name} wysłał ci {amount} żetonów w Durak Online.",
         "ru": "🎁 {name} перевёл вам {amount} фишек в «Дурак онлайн».",
     },
+    "withdrawal_approved": {
+        "uk": "✅ Заявку на {stars} ⭐ схвалено. Очікуйте ручну виплату.",
+        "en": "✅ Your request for {stars} ⭐ was approved. Please wait for the manual payout.",
+        "pl": "✅ Wniosek o {stars} ⭐ został zaakceptowany. Poczekaj na ręczną wypłatę.",
+        "ru": "✅ Заявка на {stars} ⭐ одобрена. Ожидайте ручную выплату.",
+    },
+    "withdrawal_rejected": {
+        "uk": "Заявку на {stars} ⭐ відхилено. Фішки повернено на баланс. Причина: {reason}",
+        "en": "Your request for {stars} ⭐ was rejected. Chips were returned to your balance. Reason: {reason}",
+        "pl": "Wniosek o {stars} ⭐ został odrzucony. Żetony wróciły na saldo. Powód: {reason}",
+        "ru": "Заявка на {stars} ⭐ отклонена. Фишки возвращены на баланс. Причина: {reason}",
+    },
+    "withdrawal_completed": {
+        "uk": "🎉 Виплату {stars} ⭐ за заявкою №{id} виконано.",
+        "en": "🎉 The payout of {stars} ⭐ for request #{id} is complete.",
+        "pl": "🎉 Wypłata {stars} ⭐ z wniosku nr {id} została zrealizowana.",
+        "ru": "🎉 Выплата {stars} ⭐ по заявке №{id} выполнена.",
+    },
     "tournament_match": {
         "uk": "🏆 Ваш матч у турнірі почався — заходьте, суперник чекає!",
         "en": "🏆 Your tournament match has started — come in, your opponent is waiting!",

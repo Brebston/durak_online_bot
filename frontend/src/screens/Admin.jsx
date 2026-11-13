@@ -3,7 +3,7 @@ import { api, label } from '../api.js'
 import { Avatar, Chip } from '../Fx.jsx'
 import { t } from '../i18n.js'
 
-const SECTIONS = [['overview', t('Огляд')], ['analytics', t('Аналітика')], ['alerts', t('Сигнали')], ['broadcast', t('Розсилка')], ['balance', t('Баланси')], ['matches', t('Матчі')], ['tickets', t('Звернення')], ['modes', t('Режими')], ['audit', t('Аудит')]]
+const SECTIONS = [['overview', t('Огляд')], ['analytics', t('Аналітика')], ['alerts', t('Сигнали')], ['broadcast', t('Розсилка')], ['withdrawals', t('Виведення')], ['balance', t('Баланси')], ['matches', t('Матчі')], ['tickets', t('Звернення')], ['modes', t('Режими')], ['audit', t('Аудит')]]
 const ts = (sec) => new Date(sec * 1000).toLocaleString('uk-UA')
 
 // window.prompt не працює в деяких клієнтах Telegram — власне модальне вікно
@@ -41,6 +41,7 @@ export default function Admin({ me, toast, reloadMe }) {
       {sec === 'analytics' && <Analytics toast={toast} />}
       {sec === 'alerts' && <Alerts toast={toast} />}
       {sec === 'broadcast' && <Broadcast toast={toast} />}
+      {sec === 'withdrawals' && <Withdrawals toast={toast} />}
       {sec === 'balance' && <Balances toast={toast} reloadMe={reloadMe} />}
       {sec === 'matches' && <Matches toast={toast} />}
       {sec === 'tickets' && <Tickets toast={toast} />}
@@ -51,6 +52,75 @@ export default function Admin({ me, toast, reloadMe }) {
 }
 
 const PERIODS = [['today', t('Сьогодні')], ['7d', t('7 днів')], ['30d', t('30 днів')], ['all', t('Увесь час')]]
+
+const WSTATUS = {
+  pending: t('Очікує схвалення'),
+  approved: t('Схвалено · очікує виплати'),
+  completed: t('Виконано'),
+  rejected: t('Відхилено'),
+}
+
+function Withdrawals({ toast }) {
+  const [list, setList] = useState([])
+  const [filter, setFilter] = useState('open')
+  const load = useCallback(() => {
+    api(`/api/admin/withdrawals?status=${filter}`).then((r) => setList(r.requests)).catch((e) => toast(e.message))
+  }, [filter, toast])
+  useEffect(() => {
+    load()
+    const timer = setInterval(load, 30000)
+    return () => clearInterval(timer)
+  }, [load])
+  const act = async (w, action, body = {}) => {
+    try {
+      await api(`/api/admin/withdrawals/${w.id}/${action}`, body)
+      toast(t('Заявку №{0} оновлено', w.id))
+      load()
+    } catch (e) { toast(e.message) }
+  }
+  const reject = async (w) => {
+    const reason = await ask(t('Причина відхилення заявки:'))
+    if (reason) await act(w, 'reject', { reason })
+  }
+  const complete = async (w) => {
+    const payout_reference = await ask(t('Підтвердження ручної виплати (наприклад, нотатка про подарунок Stars):'))
+    if (payout_reference) await act(w, 'complete', { payout_reference })
+  }
+  return (
+    <section className="card-box">
+      <div className="seg wrap">
+        {[
+          ['open', t('Відкриті')], ['pending', t('Очікують')], ['approved', t('Схвалені')],
+          ['completed', t('Виконані')], ['rejected', t('Відхилені')],
+        ].map(([id, name]) => <button key={id} className={filter === id ? 'on' : ''} onClick={() => setFilter(id)}>{name}</button>)}
+      </div>
+      <ul className="list">
+        {list.length === 0 && <li className="hint">{t('Заявок немає')}</li>}
+        {list.map((w) => (
+          <li key={w.id}>
+            <div><b>№{w.id} · {WSTATUS[w.status] || w.status}</b>
+              <small>{w.name} · {t('Telegram ID:')} {w.user_id}{w.username ? ` · @${w.username}` : ''}</small>
+              <small>{ts(w.created_at)} · {w.chips} {t('фішок')} → {w.stars} ⭐
+                {w.eur_estimate != null ? ` · ${t('оцінка €{0}', Number(w.eur_estimate).toFixed(2))}` : ''}</small>
+              {w.decision_note && <small>{t('Причина:')} {w.decision_note}</small>}
+              {w.payout_reference && <small>{t('Підтвердження виплати:')} {w.payout_reference}</small>}
+            </div>
+            <div className="right">
+              {w.status === 'pending' && <>
+                <button className="btn small primary" onClick={() => act(w, 'approve')}>{t('Схвалити')}</button>
+                <button className="btn small warn" onClick={() => reject(w)}>{t('Відхилити')}</button>
+              </>}
+              {w.status === 'approved' && <>
+                <button className="btn small primary" onClick={() => complete(w)}>{t('Позначити виконаною')}</button>
+                <button className="btn small warn" onClick={() => reject(w)}>{t('Відхилити')}</button>
+              </>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
 
 function BankReport({ toast }) {
   const [period, setPeriod] = useState('7d')

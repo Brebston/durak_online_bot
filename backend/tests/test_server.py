@@ -357,19 +357,23 @@ def test_admin_bank_endpoint(client):
     assert client.get("/api/admin/bank", headers={"Authorization": "dev 2"}).status_code == 403
 
 
-def test_withdrawals_disabled(client, tmp_path):
-    assert client.post("/api/withdrawals", json={"chips": 10}, headers={"Authorization": "dev 5"}).status_code in (404, 405)
-    from app.ledger import Ledger
+def test_withdrawal_request_reserve_survives_restart(client, tmp_path):
     db_file = tmp_path / "w.db"
-    db = DB(db_file)
-    L = Ledger(db)
-    db.upsert_user(77, "W", None)
-    L.post("u:77", 500, "deposit")
-    rid = db.ex("INSERT INTO withdrawal_requests(user_id,chips,stars,status,created_at) VALUES(77,300,30,'pending',0)")
-    L.hold("u:77", 300, f"withdrawal:{rid}")
-    assert L.available("u:77") == 200
     main.init_state(str(db_file))
     main.S.rooms.rng.uniform = lambda a, b: 0.0
     main.S.rooms.speed = 0
-    assert main.S.ledger.available("u:77") == 500
-    assert main.S.db.one("SELECT status FROM withdrawal_requests WHERE id=?", (rid,))["status"] == "rejected"
+    auth = {"Authorization": "dev 77:W"}
+    client.get("/api/me", headers=auth)
+    main.S.ledger.post("u:77", 500, "deposit")
+    response = client.post("/api/withdrawals", json={"chips": 300}, headers=auth)
+    assert response.status_code == 200
+    rid = response.json()["id"]
+    assert response.json()["stars"] == 30
+    assert main.S.ledger.available("u:77") == 200
+
+    # An active withdrawal hold must persist across a server restart.
+    main.init_state(str(db_file))
+    main.S.rooms.rng.uniform = lambda a, b: 0.0
+    main.S.rooms.speed = 0
+    assert main.S.ledger.available("u:77") == 200
+    assert main.S.db.one("SELECT status FROM withdrawal_requests WHERE id=?", (rid,))["status"] == "pending"

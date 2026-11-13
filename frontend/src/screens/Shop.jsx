@@ -66,7 +66,7 @@ export default function Shop({ me, reload, toast }) {
           <section className="card-box">
             <h3>{t('Баланс:') + ' '}{me.balance.chips} <Chip /></h3>
             <p className="hint">1 ⭐ = {me.shop.rate}{' ' + t(
-              'фішок. На фішки можна грати, купувати оформлення або подати заявку на ручну виплату в розділі «Вивід». Виплату перевіряє й надсилає адміністратор.'
+              'фішок. Фішки — ігрова валюта лише для цієї гри, не виводяться і не обмінюються на гроші.'
             )}</p>
           </section>
           <div className="packs">
@@ -101,6 +101,7 @@ export default function Shop({ me, reload, toast }) {
                   : owned ? (item.type === 'emoji'
                     ? <span className="hint">{t('✓ Ваше')}</span>
                     : <button className="btn small" onClick={() => equip(item)}>{t('Встановити')}</button>)
+                    : item.award ? <span className="lock">{{ streak: t('🔥 7 днів поспіль'), tournament: t('🏆 Перемога в турнірі'), season: t('⭐ Топ-10 сезону') }[item.award]}</span>
                     : item.level ? <span className="lock">{t('🔒 Рівень') + ' '}{item.level}</span>
                       : <button className="btn small primary" disabled={busy || me.available.chips < item.price} onClick={() => buy(item)}>
                         {item.price} <Chip />

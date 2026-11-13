@@ -56,6 +56,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "pl": "🎁 {name} wysłał ci {amount} żetonów w Durak Online.",
         "ru": "🎁 {name} перевёл вам {amount} фишек в «Дурак онлайн».",
     },
+    "tournament_match": {
+        "uk": "🏆 Ваш матч у турнірі почався — заходьте, суперник чекає!",
+        "en": "🏆 Your tournament match has started — come in, your opponent is waiting!",
+        "pl": "🏆 Twój mecz w turnieju się zaczął — wchodź, przeciwnik czeka!",
+        "ru": "🏆 Ваш матч в турнире начался — заходите, соперник ждёт!",
+    },
     "admin_only": {
         "uk": "Команда лише для адміністратора. Ваш Telegram ID: {id} — додайте його в змінну ADMIN_IDS на сервері.",
         "en": "Admin-only command. Your Telegram ID: {id} — add it to ADMIN_IDS on the server.",

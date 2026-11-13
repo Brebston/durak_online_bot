@@ -28,6 +28,13 @@ export function t(key, ...args) {
   return args.length ? s.replace(/\{(\d+)\}/g, (_, i) => (args[i] ?? '')) : s
 }
 
+/** Титул гравця: «⭐ Топ-10 сезону 2026-10» має змінну частину. */
+export function titleText(label) {
+  if (!label) return ''
+  const m = label.match(/^⭐ Топ-10 сезону (.+)$/)
+  return m ? t('⭐ Топ-10 сезону {0}', m[1]) : t(label)
+}
+
 /** Змінити мову: зберігаємо й перезавантажуємо Mini App, щоб усі тексти оновились. */
 export function setLang(l) {
   try { localStorage.setItem('lang', l) } catch { /* ignore */ }

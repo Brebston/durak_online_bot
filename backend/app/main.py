@@ -21,10 +21,13 @@ from .config import settings
 from .crypto import DealCipher
 from .db import DB
 from .ledger import BANK, Ledger, LedgerError, acc
-from .levels import progress
+from .levels import level_of, progress
+from .ops import Ops
+from .progress import ACHIEVEMENTS, Progress, season_id
 from .rooms import RoomError, RoomManager
 from .shop import CATALOG, Shop, ShopError
 from .social import Social, SocialError
+from .tournaments import Tournaments
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("main")
@@ -60,6 +63,9 @@ class State:
     shop: Shop
     social: Social
     avatars: Avatars
+    progress: Progress
+    tournaments: Tournaments
+    ops: Ops
     tg = None
     conns: dict[int, set[WebSocket]] = defaultdict(set)
     http_limit = RateLimiter(5, 30)
@@ -90,7 +96,15 @@ def init_state(db_path: str | None = None) -> None:
     S.avatars = Avatars(S.db)
     S.rooms = RoomManager(S.db, S.ledger, DealCipher(settings.deal_key), send_to_user, shop=S.shop, social=S.social)
     S.rooms.online = is_online
+    S.progress = Progress(S.db)
+    S.rooms.progress = S.progress
+    S.tournaments = Tournaments(S.db, S.rooms, S.progress, send_to_user)
+    S.tournaments.is_online = is_online
+    S.ops = Ops(S.db, settings.admin_ids, lambda: S.rooms.modes().get("alert_amount", 5000))
+    S.ops.progress = S.progress
+    S.ledger.watch = S.ops.on_tx
     recover_after_restart()
+    S.tournaments.recover()
     moved = S.ledger.sweep_to_bank()
     if moved:
         log.info("Перенесено в банк гри %s фішок комісії/магазину", moved)
@@ -104,9 +118,18 @@ def recover_after_restart() -> None:
     for m in stale:
         S.db.ex("UPDATE matches SET status='cancelled', finished_at=?, result=? WHERE id=?",
                 (int(time.time()), reason, m["id"]))
-    held = S.db.one("SELECT COUNT(*) n FROM holds WHERE status='active' AND room_id NOT LIKE 'withdrawal:%'")["n"]
-    # Waiting/playing rooms are in memory and disappear on restart; withdrawal reserves persist in SQLite.
-    S.db.ex("UPDATE holds SET status='released' WHERE status='active' AND room_id NOT LIKE 'withdrawal:%'")
+    held = S.db.one("SELECT COUNT(*) n FROM holds WHERE status='active'")["n"]
+    S.db.ex("UPDATE holds SET status='released' WHERE status='active'")
+    # вивід фішок у Stars вимкнено: незавершені заявки скасовуються, зарезервовані фішки повертаються гравцям
+    try:
+        open_w = S.db.q("SELECT id FROM withdrawal_requests WHERE status IN ('pending','approved')")
+    except Exception:  # noqa: BLE001
+        open_w = []
+    for w in open_w:
+        S.db.ex("UPDATE withdrawal_requests SET status='rejected', decided_at=?, decision_note=? WHERE id=?",
+                (int(time.time()), "Вивід фішок вимкнено — фішки повернуто на баланс", w["id"]))
+    if open_w:
+        S.db.audit(None, "withdrawals_disabled", None, {"cancelled_requests": len(open_w)})
     if stale or held:
         S.db.audit(None, "restart_recovery", None, {"matches": len(stale), "holds": held})
         log.warning("Після перезапуску скасовано матчів: %s, повернуто резервів: %s", len(stale), held)
@@ -132,15 +155,19 @@ async def lifespan(app: FastAPI):
         await S.tg.start()
         S.rooms.bot_username = S.tg.username
         S.rooms.notify_offline = S.tg.notify_invite
+        S.tournaments.notify_offline = S.tg.notify_text
+        S.ops.tg = S.tg
         task = asyncio.create_task(S.tg.run_polling())
         log.info("Bot @%s started", S.tg.username)
     else:
         log.warning("BOT_TOKEN не задано — бот не запущено (лише DEV_MODE)")
     if settings.dev_mode and settings.bot_token:
         log.warning("DEV_MODE=1 ігнорується, бо задано BOT_TOKEN: вхід лише через Telegram")
-    cleanup = asyncio.create_task(S.rooms.cleanup_loop())
+    loops = [asyncio.create_task(S.rooms.cleanup_loop()), asyncio.create_task(S.tournaments.loop()),
+             asyncio.create_task(S.ops.loop())]
     yield
-    cleanup.cancel()
+    for t in loops:
+        t.cancel()
     if task:
         task.cancel()
 
@@ -253,8 +280,13 @@ async def me(user: dict = Depends(current_user)):
     limit = int(modes.get("free_games_per_day") or 0)
     is_admin = user["id"] in settings.admin_ids
     room = S.rooms.current(user["id"])
+    daily = S.progress.daily_login(user["id"])
+    if daily:
+        u = S.db.user(user["id"])
     return {
         "id": u["id"], "name": u["name"], "username": u["username"],
+        "daily": daily, "streak": u["streak"] or 0, "rating": u["rating"] or 1000, "title": u["title"],
+        "quests_left": sum(1 for q in S.progress.quests(user["id"]) if not q["done"]),
         "balance": {"chips": S.ledger.balance(a)},
         "available": {"chips": S.ledger.available(a)},
         "stats": user_stats(user["id"]),
@@ -272,10 +304,6 @@ async def me(user: dict = Depends(current_user)):
         "banned": bool(u["banned"]),
         "verification": "not_required",
         "modes": modes,
-        "withdrawal": {
-            "stars_per_chips": settings.stars_to_chips,
-            "eur_per_star": settings.withdrawal_eur_per_star if settings.withdrawal_eur_per_star > 0 else None,
-        },
         "shop": {"rate": settings.stars_to_chips, "packs": settings.star_packs, "enabled": bool(S.tg) or dev_auth_allowed()},
         "room": room.id if room else None,
     }
@@ -557,44 +585,6 @@ async def support(body: TicketIn, user: dict = Depends(current_user)):
     return {"id": tid}
 
 
-def withdrawal_public(row: dict) -> dict:
-    return {k: row[k] for k in (
-        "id", "chips", "stars", "eur_estimate", "status", "created_at", "decided_at",
-        "completed_at", "decision_note", "payout_reference",
-    )}
-
-
-@app.get("/api/withdrawals")
-async def withdrawals(user: dict = Depends(current_user)):
-    rows = S.db.q("SELECT * FROM withdrawal_requests WHERE user_id=? ORDER BY id DESC LIMIT 30", (user["id"],))
-    return {"requests": [withdrawal_public(r) for r in rows]}
-
-
-class WithdrawalIn(BaseModel):
-    chips: int
-
-
-@app.post("/api/withdrawals")
-async def create_withdrawal(body: WithdrawalIn, user: dict = Depends(current_user)):
-    if body.chips <= 0 or settings.stars_to_chips <= 0 or body.chips % settings.stars_to_chips:
-        raise HTTPException(400, f"Сума має бути додатною і кратною {settings.stars_to_chips} фішкам")
-    stars = body.chips // settings.stars_to_chips
-    estimate = stars * settings.withdrawal_eur_per_star if settings.withdrawal_eur_per_star > 0 else None
-    try:
-        request_id = S.ledger.create_withdrawal_request(user["id"], body.chips, stars, estimate)
-    except LedgerError as e:
-        raise HTTPException(400, str(e))
-    if S.tg:
-        for admin_id in settings.admin_ids:
-            try:
-                await S.tg.bot.send_message(
-                    admin_id,
-                    f"Нова заявка на виведення №{request_id}: {body.chips} фішок → {stars} ⭐ "
-                    f"від {user['name']} (Telegram ID {user['id']}).",
-                )
-            except Exception:  # noqa: BLE001
-                log.info("cannot notify admin %s about withdrawal %s", admin_id, request_id)
-    return {"id": request_id, "chips": body.chips, "stars": stars, "eur_estimate": estimate, "status": "pending"}
 
 
 @app.get("/api/lobby")
@@ -618,6 +608,8 @@ async def admin_overview(admin: dict = Depends(admin_user)):
             for r in S.rooms.rooms.values() if r.status in ("waiting", "playing")
         ],
         "open_tickets": S.db.one("SELECT COUNT(*) n FROM tickets WHERE status='open'")["n"],
+        "alerts_new": S.db.one("SELECT COUNT(*) n FROM alerts WHERE seen=0")["n"]
+        + S.db.one("SELECT COUNT(*) n FROM reports WHERE status='open'")["n"],
         "modes": S.rooms.modes(),
     }
 
@@ -640,126 +632,7 @@ async def stars_overview() -> dict:
         except Exception:  # noqa: BLE001
             bot_balance = None
     return {"paid_total": paid, "refunds": len(refunds), "bot_balance": bot_balance,
-            "withdraw_hint": "Виведення: профіль бота в Telegram → Balance/Stars → Withdraw через Fragment (у TON)."}
-
-
-@app.get("/api/admin/withdrawals")
-async def admin_withdrawals(status: str = "", admin: dict = Depends(admin_user)):
-    if status and status not in ("open", "pending", "approved", "completed", "rejected"):
-        raise HTTPException(400, "Невідомий статус")
-    if status == "open":
-        where, args = "WHERE w.status IN ('pending','approved')", ()
-    else:
-        where = "WHERE w.status=?" if status else ""
-        args = (status,) if status else ()
-    rows = S.db.q(
-        "SELECT w.*, u.name, u.username FROM withdrawal_requests w JOIN users u ON u.id=w.user_id "
-        f"{where} ORDER BY CASE w.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, w.id DESC LIMIT 200",
-        args,
-    )
-    return {"requests": rows}
-
-
-def audit_withdrawal(conn, admin_id: int, action: str, request: dict, data: dict | None = None) -> None:
-    payload = {"user_id": request["user_id"], "chips": request["chips"], "stars": request["stars"], **(data or {})}
-    conn.execute(
-        "INSERT INTO audit(ts,admin_id,action,target,data) VALUES(?,?,?,?,?)",
-        (int(time.time()), admin_id, action, str(request["id"]), json.dumps(payload, ensure_ascii=False)),
-    )
-
-
-@app.post("/api/admin/withdrawals/{request_id}/approve")
-async def approve_withdrawal(request_id: int, admin: dict = Depends(admin_user)):
-    with S.db.tx() as conn:
-        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Заявку не знайдено")
-        if row["status"] != "pending":
-            raise HTTPException(409, "Схвалити можна лише заявку зі статусом «очікує»")
-        hold = conn.execute(
-            "SELECT amount FROM holds WHERE account=? AND room_id=? AND status='active'",
-            (acc(row["user_id"]), f"withdrawal:{request_id}"),
-        ).fetchone()
-        if not hold or hold["amount"] != row["chips"]:
-            raise HTTPException(409, "Резерв заявки не знайдено")
-        conn.execute(
-            "UPDATE withdrawal_requests SET status='approved', decided_at=?, decided_by=? WHERE id=? AND status='pending'",
-            (int(time.time()), admin["id"], request_id),
-        )
-        audit_withdrawal(conn, admin["id"], "withdrawal_approved", dict(row))
-    if S.tg:
-        try:
-            await S.tg.bot.send_message(row["user_id"], f"Заявку на {row['stars']} ⭐ схвалено. Очікуйте ручну виплату.")
-        except Exception:  # noqa: BLE001
-            log.info("cannot notify withdrawal user %s", row["user_id"])
-    return {"ok": True, "status": "approved"}
-
-
-class RejectWithdrawalIn(BaseModel):
-    reason: str
-
-
-@app.post("/api/admin/withdrawals/{request_id}/reject")
-async def reject_withdrawal(request_id: int, body: RejectWithdrawalIn, admin: dict = Depends(admin_user)):
-    reason = body.reason.strip()[:500]
-    if len(reason) < 3:
-        raise HTTPException(400, "Вкажіть причину відхилення")
-    with S.db.tx() as conn:
-        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Заявку не знайдено")
-        if row["status"] not in ("pending", "approved"):
-            raise HTTPException(409, "Цю заявку вже закрито")
-        conn.execute(
-            "UPDATE withdrawal_requests SET status='rejected', decided_at=?, decided_by=?, decision_note=? "
-            "WHERE id=? AND status IN ('pending','approved')",
-            (int(time.time()), admin["id"], reason, request_id),
-        )
-        conn.execute("UPDATE holds SET status='released' WHERE room_id=? AND status='active'",
-                     (f"withdrawal:{request_id}",))
-        audit_withdrawal(conn, admin["id"], "withdrawal_rejected", dict(row), {"reason": reason})
-    if S.tg:
-        try:
-            await S.tg.bot.send_message(row["user_id"], f"Заявку на {row['stars']} ⭐ відхилено. Причина: {reason}")
-        except Exception:  # noqa: BLE001
-            log.info("cannot notify withdrawal user %s", row["user_id"])
-    await send_to_user(row["user_id"], {"type": "balance"})
-    return {"ok": True, "status": "rejected"}
-
-
-class CompleteWithdrawalIn(BaseModel):
-    payout_reference: str
-
-
-@app.post("/api/admin/withdrawals/{request_id}/complete")
-async def complete_withdrawal(request_id: int, body: CompleteWithdrawalIn, admin: dict = Depends(admin_user)):
-    reference = body.payout_reference.strip()[:500]
-    if len(reference) < 3:
-        raise HTTPException(400, "Вкажіть підтвердження ручної виплати")
-    with S.db.tx() as conn:
-        row = conn.execute("SELECT * FROM withdrawal_requests WHERE id=?", (request_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Заявку не знайдено")
-        if row["status"] != "approved":
-            raise HTTPException(409, "Виконати можна лише схвалену заявку")
-        request = dict(row)
-        try:
-            S.ledger.complete_withdrawal(conn, request, admin["id"], reference)
-        except LedgerError as e:
-            raise HTTPException(409, str(e))
-        conn.execute(
-            "UPDATE withdrawal_requests SET status='completed', completed_at=?, completed_by=?, payout_reference=? "
-            "WHERE id=? AND status='approved'",
-            (int(time.time()), admin["id"], reference, request_id),
-        )
-        audit_withdrawal(conn, admin["id"], "withdrawal_completed", request, {"payout_reference": reference})
-    if S.tg:
-        try:
-            await S.tg.bot.send_message(row["user_id"], f"Виплату {row['stars']} ⭐ за заявкою №{request_id} виконано.")
-        except Exception:  # noqa: BLE001
-            log.info("cannot notify withdrawal user %s", row["user_id"])
-    await send_to_user(row["user_id"], {"type": "balance"})
-    return {"ok": True, "status": "completed"}
+            "withdraw_hint": "Виведення Stars бота (для власника): профіль бота в Telegram → Balance/Stars → Withdraw через Fragment (у TON)."}
 
 
 @app.get("/api/admin/bank")
@@ -913,6 +786,11 @@ class ModesIn(BaseModel):
     free_games_per_day: int
     bot_fill_seconds: int = 8
     bot_level: str = "mixed"
+    ranked: bool = True
+    tournaments: bool = True
+    tournament_wait: int = 180
+    room_fill_seconds: int = 45
+    alert_amount: int = 5000
 
 
 @app.post("/api/admin/modes")
@@ -923,6 +801,9 @@ async def admin_modes(body: ModesIn, admin: dict = Depends(admin_user)):
         raise HTTPException(400, "Комісія 0–50%")
     if data["bot_level"] not in ("easy", "medium", "hard", "mixed") or not 0 <= data["bot_fill_seconds"] <= 300:
         raise HTTPException(400, "Невірні налаштування ботів")
+    if not 30 <= data["tournament_wait"] <= 3600 or not 5 <= data["room_fill_seconds"] <= 600 \
+            or data["alert_amount"] < 0:
+        raise HTTPException(400, "Невірні налаштування")
     S.db.kv_set("modes", json.dumps(data))
     S.db.audit(admin["id"], "modes", None, data)
     return S.rooms.modes()
@@ -931,6 +812,196 @@ async def admin_modes(body: ModesIn, admin: dict = Depends(admin_user)):
 @app.get("/api/admin/audit")
 async def admin_audit(admin: dict = Depends(admin_user)):
     return {"audit": S.db.q("SELECT * FROM audit ORDER BY id DESC LIMIT 200")}
+
+
+# ---------- прогрес, рейтинги, профілі ----------
+@app.get("/api/progress")
+async def my_progress(user: dict = Depends(current_user)):
+    uid = user["id"]
+    u = S.db.user(uid)
+    return {
+        "quests": S.progress.quests(uid),
+        "achievements": S.progress.achievements(uid),
+        "titles": S.progress.titles(uid), "title": u["title"],
+        "stats": S.progress.stats(uid),
+        "streak": {"days": u["streak"] or 0, "best": u["best_streak"] or 0},
+        "rating": {"value": u["rating"] or 1000, "games": u["ranked_games"] or 0},
+        "season": season_id(),
+    }
+
+
+class TitleIn(BaseModel):
+    title_id: str = ""
+
+
+@app.post("/api/title")
+async def set_title(body: TitleIn, user: dict = Depends(current_user)):
+    if not body.title_id:
+        S.db.ex("UPDATE users SET title=NULL WHERE id=?", (user["id"],))
+        return {"title": None}
+    t = S.db.one("SELECT label FROM user_titles WHERE user_id=? AND title_id=?", (user["id"], body.title_id))
+    if not t:
+        raise HTTPException(404, "Титул не знайдено")
+    S.db.ex("UPDATE users SET title=? WHERE id=?", (t["label"], user["id"]))
+    return {"title": t["label"]}
+
+
+@app.get("/api/leaderboard")
+async def leaderboard(kind: str = "rating", scope: str = "all", user: dict = Depends(current_user)):
+    if kind not in ("rating", "week", "season"):
+        raise HTTPException(400, "Невідомий рейтинг")
+    ids = sorted(S.social.friend_ids(user["id"])) if scope == "friends" else None
+    res = S.progress.leaderboard(kind, ids, user["id"])
+    for r in res["rows"] + ([res["me"]] if res["me"] else []):
+        u = S.db.user(r["user_id"])
+        r["avatar"] = avatar_url(u)
+        r["lvl"] = level_of(int(u["xp"] or 0))
+        r["title"] = u["title"]
+    return {**res, "kind": kind, "scope": scope, "season": season_id()}
+
+
+@app.get("/api/profile/{uid}")
+async def public_profile(uid: int, user: dict = Depends(current_user)):
+    u = S.db.user(uid)
+    if not u or u["banned"]:
+        raise HTTPException(404, "Гравця не знайдено")
+    st = S.progress.stats(uid)
+    ach = [{"id": a["id"], "name": a["name"]} for a in S.progress.achievements(uid) if a["unlocked"]]
+    return {
+        "id": uid, "name": u["name"], "avatar": avatar_url(u), "lvl": level_of(int(u["xp"] or 0)),
+        "rating": u["rating"] or 1000, "ranked_games": u["ranked_games"] or 0, "title": u["title"],
+        "stats": {k: st[k] for k in ("games", "wins", "losses", "draws", "tournament_wins", "best_win_streak")},
+        "achievements": ach, "achievements_total": len(ACHIEVEMENTS),
+        "friend": S.social.are_friends(user["id"], uid), "online": is_online(uid), "me": uid == user["id"],
+    }
+
+
+class ReportIn(BaseModel):
+    user_id: int
+    reason: str
+    match_id: str | None = None
+
+
+@app.post("/api/report")
+async def report(body: ReportIn, user: dict = Depends(current_user)):
+    if body.user_id == user["id"] or not S.db.user(body.user_id):
+        raise HTTPException(400, "Некоректна скарга")
+    reason = body.reason.strip()
+    if not 2 <= len(reason) <= 300:
+        raise HTTPException(400, "Опишіть причину (до 300 символів)")
+    S.ops.report(user["id"], body.user_id, reason, body.match_id)
+    return {"ok": True}
+
+
+# ---------- турніри ----------
+@app.get("/api/tournaments")
+async def tournaments(user: dict = Depends(current_user)):
+    S.tournaments.ensure_open()
+    return {"tournaments": S.tournaments.listing(user["id"]), "enabled": S.tournaments.settings()["enabled"]}
+
+
+@app.get("/api/tournaments/{tid}")
+async def tournament(tid: int, user: dict = Depends(current_user)):
+    if not S.db.one("SELECT 1 FROM tournaments WHERE id=?", (tid,)):
+        raise HTTPException(404, "Турнір не знайдено")
+    return S.tournaments.view(tid, user["id"])
+
+
+class TournamentIn(BaseModel):
+    id: int
+
+
+@app.post("/api/tournaments/register")
+async def tournament_register(body: TournamentIn, user: dict = Depends(current_user)):
+    if S.db.user(user["id"])["banned"]:
+        raise HTTPException(403, "Обліковий запис заблоковано")
+    try:
+        await S.tournaments.register(user, body.id)
+    except RoomError as e:
+        raise HTTPException(400, str(e))
+    return S.tournaments.view(body.id, user["id"])
+
+
+@app.post("/api/tournaments/unregister")
+async def tournament_unregister(body: TournamentIn, user: dict = Depends(current_user)):
+    try:
+        S.tournaments.unregister(user["id"], body.id)
+    except RoomError as e:
+        raise HTTPException(400, str(e))
+    return S.tournaments.view(body.id, user["id"])
+
+
+# ---------- адмін: аналітика, розсилка, бекап, сповіщення ----------
+@app.get("/api/admin/analytics")
+async def admin_analytics(days: int = 14, admin: dict = Depends(admin_user)):
+    return S.ops.analytics(days, online=len(online_ids()))
+
+
+class BroadcastIn(BaseModel):
+    text: str
+    button: str = "🃏 Грати"
+    test: bool = False
+
+
+@app.post("/api/admin/broadcast")
+async def admin_broadcast(body: BroadcastIn, admin: dict = Depends(admin_user)):
+    text = body.text.strip()
+    if not 1 <= len(text) <= 3500 or not 1 <= len(body.button.strip()) <= 40:
+        raise HTTPException(400, "Текст 1–3500 символів, кнопка до 40")
+    try:
+        return await S.ops.broadcast(text, body.button.strip(), admin["id"], test=body.test)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Telegram: {e}")
+
+
+@app.get("/api/admin/broadcast")
+async def admin_broadcast_status(admin: dict = Depends(admin_user)):
+    return {**S.ops.broadcast_state, "recipients": len(S.ops.recipients()), "bot": bool(S.tg)}
+
+
+@app.post("/api/admin/backup")
+async def admin_backup(admin: dict = Depends(admin_user)):
+    if not S.tg:
+        raise HTTPException(400, "Бот не запущений — бекап нікуди надіслати")
+    S.db.audit(admin["id"], "backup", None, {})
+    return await S.ops.send_backup("manual")
+
+
+@app.get("/api/admin/alerts")
+async def admin_alerts(admin: dict = Depends(admin_user)):
+    last = S.db.kv_get("last_backup")
+    return {
+        "alerts": S.db.q("SELECT * FROM alerts ORDER BY id DESC LIMIT 100"),
+        "reports": S.db.q(
+            "SELECT r.*, f.name from_name, t.name target_name FROM reports r "
+            "LEFT JOIN users f ON f.id=r.from_id LEFT JOIN users t ON t.id=r.target_id "
+            "ORDER BY r.id DESC LIMIT 100"),
+        "last_backup": int(last) if last else None,
+    }
+
+
+@app.post("/api/admin/alerts/seen")
+async def admin_alerts_seen(admin: dict = Depends(admin_user)):
+    S.db.ex("UPDATE alerts SET seen=1 WHERE seen=0")
+    S.db.ex("UPDATE reports SET status='seen' WHERE status='open'")
+    return {"ok": True}
+
+
+class TournamentCreateIn(BaseModel):
+    size: int
+    rules: dict | None = None
+
+
+@app.post("/api/admin/tournaments")
+async def admin_tournament_create(body: TournamentCreateIn, admin: dict = Depends(admin_user)):
+    try:
+        tid = S.tournaments.create(body.size, body.rules, auto=False)
+    except (RoomError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    S.db.audit(admin["id"], "tournament_create", str(tid), {"size": body.size})
+    return S.tournaments.view(tid, admin["id"])
 
 
 # ---------- WebSocket ----------
@@ -1018,6 +1089,8 @@ async def handle_ws(uid: int, user: dict, msg: dict) -> None:
         await S.rooms.action(uid, str(msg.get("room", "")), msg.get("action") or {}, msg.get("version"))
     elif t == "surrender":
         await S.rooms.surrender(uid)
+    elif t == "rematch":
+        await S.rooms.rematch(uid, str(msg.get("room", "")))
     elif t == "state":
         r = S.rooms.current(uid)
         await send_to_user(uid, S.rooms.payload(r, uid) if r else {"type": "left"})

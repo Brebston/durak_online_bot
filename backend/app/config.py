@@ -16,8 +16,6 @@ class Settings:
     dev_mode: bool = os.getenv("DEV_MODE", "0") == "1"
     # 1 Telegram Star = N фішок
     stars_to_chips: int = int(os.getenv("STARS_TO_CHIPS", "10"))
-    # Optional display estimate only; actual purchase price varies by platform and region.
-    withdrawal_eur_per_star: float = float(os.getenv("WITHDRAWAL_EUR_PER_STAR", "0"))
     star_packs: list[int] = field(default_factory=lambda: [int(x) for x in os.getenv("STAR_PACKS", "25,50,100,250").split(",")])
     # скільки безкоштовних матчів на день (0 = без обмежень); адміністратори без обмежень
     free_games_per_day: int = int(os.getenv("FREE_GAMES_PER_DAY", "1"))

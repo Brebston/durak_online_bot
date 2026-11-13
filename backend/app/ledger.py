@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 
@@ -26,6 +25,7 @@ def acc(uid: int) -> str:
 class Ledger:
     def __init__(self, db: DB):
         self.db = db
+        self.watch = None   # callable(account, amount, kind, src) — нагляд за підозрілими операціями
 
     # ---------- читання ----------
     def balance(self, account: str, conn=None) -> int:
@@ -64,6 +64,7 @@ class Ledger:
                 self._insert(conn, account, amount, kind, ref, reason, admin_id, idem)
         except sqlite3.IntegrityError:
             return False  # повторний запит з тим самим ключем — не зараховуємо двічі
+        self._watch(account, amount, kind, None)
         return True
 
     def transfer(self, src: str, dst: str, amount: int, kind: str, *, ref=None, reason=None,
@@ -79,7 +80,16 @@ class Ledger:
                 self._insert(conn, dst, amount, kind, ref, reason, None, f"{idem}:in" if idem else None)
         except sqlite3.IntegrityError:
             return False
+        self._watch(dst, amount, kind, src)
         return True
+
+    def _watch(self, account: str, amount: int, kind: str, src: str | None) -> None:
+        """Сповіщення про підозрілі операції (великі суми тощо) — див. ops.Ops.on_tx."""
+        if self.watch:
+            try:
+                self.watch(account, amount, kind, src)
+            except Exception:  # noqa: BLE001
+                pass
 
     def admin_adjust(self, admin_id: int, account: str, amount: int, reason: str) -> None:
         reason = (reason or "").strip()
@@ -130,56 +140,6 @@ class Ledger:
             if fee:
                 self._insert(conn, BANK, fee, "fee", ref=match_id, idem=f"settle:{match_id}:fee")  # комісія — у банк гри
         return out
-
-    def create_withdrawal_request(self, uid: int, chips: int, stars: int, eur_estimate: float | None) -> int:
-        """Create a pending request and reserve its chips in the same transaction."""
-        account = acc(uid)
-        with self.db.tx() as conn:
-            if self.available(account, conn) < chips:
-                raise LedgerError("Недостатньо доступних фішок")
-            active = conn.execute(
-                "SELECT 1 FROM withdrawal_requests WHERE user_id=? AND status IN ('pending','approved') LIMIT 1",
-                (uid,),
-            ).fetchone()
-            if active:
-                raise LedgerError("У вас уже є активна заявка на виведення")
-            now = int(time.time())
-            cur = conn.execute(
-                "INSERT INTO withdrawal_requests(user_id,chips,stars,eur_estimate,status,created_at) "
-                "VALUES(?,?,?,?, 'pending',?)",
-                (uid, chips, stars, eur_estimate, now),
-            )
-            request_id = cur.lastrowid
-            conn.execute(
-                "INSERT INTO holds(account,amount,room_id,status,created_at) VALUES(?,?,?,'active',?)",
-                (account, chips, f"withdrawal:{request_id}", now),
-            )
-            conn.execute(
-                "INSERT INTO audit(ts,admin_id,action,target,data) VALUES(?,NULL,?,?,?)",
-                (now, "withdrawal_requested", str(request_id),
-                 json.dumps({"user_id": uid, "chips": chips, "stars": stars, "eur_estimate": eur_estimate}, ensure_ascii=False)),
-            )
-            return request_id
-
-    def complete_withdrawal(self, conn, request: dict, admin_id: int, payout_reference: str) -> None:
-        """Atomically debit the reserved chips and settle the hold."""
-        rid = request["id"]
-        hold = conn.execute(
-            "SELECT id,amount FROM holds WHERE account=? AND room_id=? AND status='active'",
-            (acc(request["user_id"]), f"withdrawal:{rid}"),
-        ).fetchone()
-        if not hold or hold["amount"] != request["chips"]:
-            raise LedgerError("Резерв заявки не знайдено або його сума не збігається")
-        inserted = conn.execute(
-            "INSERT OR IGNORE INTO transactions(account,amount,kind,ref,reason,admin_id,idem,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (acc(request["user_id"]), -request["chips"], "withdrawal", str(rid),
-             f"Виплата {request['stars']} Stars; {payout_reference}", admin_id,
-             f"withdrawal:{rid}", int(time.time())),
-        )
-        if inserted.rowcount != 1:
-            raise LedgerError("Списання за цією заявкою вже проведене")
-        conn.execute("UPDATE holds SET status='settled' WHERE id=? AND status='active'", (hold["id"],))
 
     def sweep_to_bank(self) -> int:
         """Переносить у банк гри залишки старих рахунків «комісія» і «магазин» (до того, як усе йшло в банк)."""

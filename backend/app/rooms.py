@@ -54,6 +54,8 @@ class Seat:
     seen: set = field(default_factory=set)            # карти, які бот уже «перевірив» на мухлювання
     lvl: int = 1                                       # рівень гравця (для відображення)
     avatar: str | None = None
+    rating: int = 1000
+    title: str | None = None
 
     @property
     def account(self) -> str:
@@ -63,7 +65,7 @@ class Seat:
         bot = self.bot and not hide_bot
         return {"pid": self.pid, "name": self.name, "bot": bot, "level": self.level if bot else None,
                 "you": me is not None and self.user_id == me, "back": self.back, "lvl": self.lvl,
-                "avatar": self.avatar}
+                "avatar": self.avatar, "rating": self.rating, "title": self.title}
 
 
 @dataclass
@@ -95,6 +97,13 @@ class Room:
     bot_task: asyncio.Task | None = None
     timer_task: asyncio.Task | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    counters: dict = field(default_factory=dict)     # pid -> {trump_defends, throw_ins, transfers, catches, takes}
+    meta: dict = field(default_factory=dict)         # напр. {"tournament": id, "tmatch": (round, idx)}
+    rematch: set = field(default_factory=set)        # uid, які хочуть реванш
+
+    @property
+    def ranked(self) -> bool:
+        return self.mode == "ranked"
 
     def key(self) -> tuple:
         return (self.mode, self.stake, self.size, json.dumps(self.rules.to_dict(), sort_keys=True))
@@ -129,6 +138,9 @@ class RoomManager:
         self.user_room: dict[int, str] = {}
         self.rng = random.SystemRandom()
         self.speed = 1.0  # множник «часу на роздуми» ботів (у тестах — 0)
+        self.progress = None                       # app.progress.Progress
+        self.on_finish: list[Callable[[Room], Awaitable[None]]] = []   # напр. турніри
+        self.busy: Callable[[int], str | None] = lambda uid: None     # причина, чому гравець зайнятий (турнір)
 
     # ---------- налаштування режимів (змінює адмін) ----------
     def modes(self) -> dict:
@@ -136,7 +148,9 @@ class RoomManager:
         base = {"free": True, "stake": True, "bots": True, "stakes": settings.stakes,
                 "commission_percent": settings.commission_percent,
                 "free_games_per_day": settings.free_games_per_day,
-                "bot_fill_seconds": settings.bot_fill_seconds, "bot_level": "mixed"}
+                "bot_fill_seconds": settings.bot_fill_seconds, "bot_level": "mixed",
+                "ranked": True, "room_fill_seconds": 45, "alert_amount": 5000,
+                "tournaments": True, "tournament_wait": 180}
         if raw:
             base.update(json.loads(raw))
         return base
@@ -170,7 +184,9 @@ class RoomManager:
                 "owner": room.owner == uid,
                 # у безкоштовному режимі боти виглядають як звичайні гравці;
                 # у грі на фішки позначка бота лишається (гравці платять Stars)
-                "seats": [s.public(uid, hide_bot=room.mode == "free") for s in room.seats],
+                "seats": [s.public(uid, hide_bot=room.mode != "stake") for s in room.seats],
+                "ranked": room.ranked, "tournament": room.meta.get("tournament"),
+                "rematch": [room.seat_of(u).name for u in room.rematch if room.seat_of(u)],
                 "deadline": room.deadline, "now": time.time(),
                 "terms": self.terms(room), "invite": self.invite_link(room),
                 "match_id": room.match_id,
@@ -197,7 +213,26 @@ class RoomManager:
         room.moves += 1
         room.last = {**ev, "n": room.moves}
         room.last_ts = time.time()
+        self._count(room, ev)
         self._react(room, ev)
+
+    def _count(self, room: Room, ev: dict) -> None:
+        """Лічильники для завдань і досягнень."""
+        def bump(pid, key, n=1):
+            c = room.counters.setdefault(pid, {})
+            c[key] = c.get(key, 0) + n
+        t, p = ev.get("type"), ev.get("player")
+        g = room.game
+        if t == "defend" and ev.get("card", "").endswith(g.trump):
+            bump(p, "trump_defends")
+        elif t == "attack" and len(g.table) > 1:
+            bump(p, "throw_ins")
+        elif t == "transfer":
+            bump(p, "transfers")
+        elif t == "catch" and ev.get("caught"):
+            bump(p, "catches")
+        if ev.get("bout_end") == "take" and ev.get("defender"):
+            bump(ev["defender"], "takes")
 
     # ---------- реакції ботів (смайлики) ----------
     def _react(self, room: Room, ev: dict) -> None:
@@ -264,7 +299,7 @@ class RoomManager:
     # ---------- створення / вхід ----------
     def _validate_params(self, uid: int, mode: str, size: int, stake: int, rules: dict | None) -> Rules:
         m = self.modes()
-        if mode not in ("free", "stake"):
+        if mode not in ("free", "stake", "ranked"):
             raise RoomError("Невідомий режим")
         if not m.get(mode):
             raise RoomError("Цей режим зараз вимкнено")
@@ -278,6 +313,12 @@ class RoomManager:
             raise RoomError("Невірні правила")
         if size * r.hand_size > r.deck_size:
             raise RoomError("Замало карт у колоді для такої кількості гравців")
+        if mode == "ranked":
+            # рейтингові матчі — завжди 1 на 1, без мухлювання, однакові умови для всіх
+            if size != 2:
+                raise RoomError("Рейтингові матчі — лише 1 на 1")
+            r.cheating = False
+            r.deck_size, r.hand_size, r.max_table, r.first_bout_limit, r.turn_seconds = 36, 6, 6, 5, 30
         return r
 
     def _check_user(self, user: dict) -> None:
@@ -294,13 +335,25 @@ class RoomManager:
         if u and u["free_day"] == today and u["free_count"] >= limit:
             raise RoomError("Безкоштовна гра доступна {0} раз(и) на день. Спробуйте завтра або зіграйте на фішки.", limit)
 
+    def _rating(self, uid: int) -> int:
+        u = self.db.user(uid)
+        return int(u["rating"] or 1000) if u else 1000
+
     async def find_match(self, user: dict, mode: str, size: int, stake: int, rules: dict | None) -> Room:
         r = self._validate_params(user["id"], mode, size, stake, rules)
         stake = stake if mode == "stake" else 0
         probe = Room("", mode, stake, size, r, False, user["id"])
+        my_rating = self._rating(user["id"])
+        now = time.time()
         for room in self.rooms.values():
             if (room.status == "waiting" and not room.private and room.key() == probe.key()
                     and len(room.seats) < room.size and not room.seat_of(user["id"])):
+                if room.ranked:
+                    # суперник за силою: вікно рейтингу розширюється, що довше людина чекає
+                    other = room.humans()[0].rating if room.humans() else my_rating
+                    window = 100 + 30 * (now - room.created)
+                    if abs(other - my_rating) > min(window, 600):
+                        continue
                 await self.join(user, room.id)
                 return room
         return await self.create(user, mode, size, stake, rules, private=False)
@@ -317,10 +370,14 @@ class RoomManager:
         except Exception:
             self.rooms.pop(room.id, None)
             raise
-        if not private and room.status == "waiting":
+        if room.status == "waiting":
             m = self.modes()
             if m.get("bots"):
-                room.fill_at = time.time() + max(0, int(m.get("bot_fill_seconds", 8)))
+                # швидка гра — за кілька секунд; власна кімната — довше, щоб друзі встигли зайти
+                wait = int(m.get("room_fill_seconds", 45)) if private else int(m.get("bot_fill_seconds", 8))
+                if room.ranked:
+                    wait += 4
+                room.fill_at = time.time() + max(0, wait)
                 room.fill_task = asyncio.create_task(self._auto_fill(room))
                 await self.broadcast(room)
         return room
@@ -333,7 +390,8 @@ class RoomManager:
                 if room.status != "waiting" or len(room.seats) >= room.size:
                     return
                 try:
-                    await self._fill_bots(room, self.modes().get("bot_level", "mixed"))
+                    level = "hard" if room.private else self.modes().get("bot_level", "mixed")
+                    await self._fill_bots(room, level)
                     return
                 except RoomError as e:
                     # напр. порожній банк гри: продовжуємо чекати людей, повторимо пізніше
@@ -350,6 +408,9 @@ class RoomManager:
     async def join(self, user: dict, room_id: str) -> Room:
         uid = user["id"]
         self._check_user(user)
+        why = self.busy(uid)
+        if why and not (self.rooms.get(room_id) and self.rooms[room_id].meta.get("tournament")):
+            raise RoomError(why)
         room = self.rooms.get(room_id)
         if not room or room.status not in ("waiting",):
             if room and room.seat_of(uid):
@@ -373,6 +434,8 @@ class RoomManager:
             u = self.db.user(uid)
             seat.lvl = level_of(int(u["xp"] or 0)) if u else 1
             seat.avatar = avatar_url(u)
+            seat.rating = int(u["rating"] or 1000) if u else 1000
+            seat.title = u["title"] if u else None
             if room.mode == "stake":
                 try:
                     seat.hold_id = self.ledger.hold(acc(uid), room.stake, room.id)
@@ -399,19 +462,13 @@ class RoomManager:
         if level not in (*LEVELS, "mixed"):
             raise RoomError("Невідома складність")
         async with room.lock:
+            hint = room.humans()[0].rating if room.humans() else 1000
             while len(room.seats) < room.size:
                 lv = level if level != "mixed" else self.rng.choices(LEVELS, weights=(1, 3, 3))[0]
-                pids = {s.pid for s in room.seats}
-                pid = f"u{self.rng.randint(5_000_000_000, 8_999_999_999)}"
-                while pid in pids:
-                    pid = f"u{self.rng.randint(5_000_000_000, 8_999_999_999)}"
-                name = random_nick(self.rng, {s.name for s in room.seats})
-                look = random_look(self.rng)
-                seat = Seat(pid=pid, name=name, bot=True, level=lv, back=look["back"],
-                            emojis=look["emojis"], chatty=look["chatty"])
-                # правдоподібний рівень (не менший, ніж потрібно для «нагородної» сорочки)
-                need = BY_ID.get(seat.back, {}).get("level", 1)
-                seat.lvl = max(need, min(40, int(self.rng.triangular(1, 35, 6))))
+                if room.ranked:
+                    # бот під силу гравця: рейтинг поруч, складність — за рейтингом
+                    lv = "hard" if hint >= 1050 else "medium"
+                seat = self._make_bot(room.seats, lv, hint)
                 if room.mode == "stake":
                     try:
                         seat.hold_id = self.ledger.hold(BANK, room.stake, room.id)
@@ -420,6 +477,102 @@ class RoomManager:
                 room.seats.append(seat)
         await self._maybe_start(room)
         await self.broadcast(room)
+
+    def _make_bot(self, seats: list[Seat], level: str, rating_hint: int = 1000, name: str | None = None,
+                  back: str | None = None, lvl: int | None = None) -> Seat:
+        pids = {s.pid for s in seats}
+        pid = f"u{self.rng.randint(5_000_000_000, 8_999_999_999)}"
+        while pid in pids:
+            pid = f"u{self.rng.randint(5_000_000_000, 8_999_999_999)}"
+        look = random_look(self.rng)
+        seat = Seat(pid=pid, name=name or random_nick(self.rng, {s.name for s in seats}), bot=True, level=level,
+                    back=back or look["back"], emojis=look["emojis"], chatty=look["chatty"])
+        # правдоподібний рівень (не менший, ніж потрібно для «нагородної» сорочки)
+        need = BY_ID.get(seat.back, {}).get("level", 1)
+        seat.lvl = lvl or max(need, min(40, int(self.rng.triangular(1, 35, 6))))
+        seat.rating = int(rating_hint + self.rng.uniform(-60, 60))
+        return seat
+
+    async def create_fixed(self, players: list[dict], mode: str, stake: int, rules: Rules,
+                           meta: dict | None = None, name: str = "") -> Room:
+        """Кімната з наперед відомим складом (турнір, реванш): усі сідають одразу, гра стартує.
+        players: [{"user_id": .., "name": ..} | {"bot": {...seat fields}}]"""
+        room = Room(secrets.token_hex(6), mode, stake, len(players), rules, True,
+                    next((p["user_id"] for p in players if p.get("user_id")), 0), name=name)
+        room.meta = dict(meta or {})
+        holds: list[int] = []
+        try:
+            for p in players:
+                if p.get("user_id"):
+                    uid = p["user_id"]
+                    u = self.db.user(uid)
+                    seat = Seat(pid=f"u{uid}", name=(u["name"] if u else p.get("name")) or str(uid), user_id=uid)
+                    if self.shop:
+                        seat.back = self.shop.equipped(uid)["back"]
+                    seat.lvl = level_of(int(u["xp"] or 0)) if u else 1
+                    seat.avatar = avatar_url(u)
+                    seat.rating = int(u["rating"] or 1000) if u else 1000
+                    seat.title = u["title"] if u else None
+                    if mode == "stake":
+                        seat.hold_id = self.ledger.hold(acc(uid), stake, room.id)
+                        holds.append(seat.hold_id)
+                else:
+                    b = p["bot"]
+                    seat = self._make_bot(room.seats, b.get("level", "hard"), b.get("rating", 1000),
+                                          name=b.get("name"), back=b.get("back"), lvl=b.get("lvl"))
+                    if b.get("emojis"):
+                        seat.emojis, seat.chatty = b["emojis"], b.get("chatty", 0.2)
+                    if mode == "stake":
+                        seat.hold_id = self.ledger.hold(BANK, stake, room.id)
+                        holds.append(seat.hold_id)
+                room.seats.append(seat)
+        except LedgerError as e:
+            for h in holds:
+                self.ledger.release(h)
+            raise RoomError(str(e))
+        self.rooms[room.id] = room
+        for s in room.humans():
+            cur = self.current(s.user_id)
+            if cur and cur.id != room.id and cur.status == "waiting":
+                await self.leave(s.user_id)
+            self.user_room[s.user_id] = room.id
+        await self._maybe_start(room)
+        await self.broadcast(room)
+        return room
+
+    async def rematch(self, uid: int, room_id: str) -> None:
+        """Реванш: коли всі люди за столом погодились — нова партія з тим самим складом (боти погоджуються самі)."""
+        room = self.rooms.get(room_id)
+        if not room or room.status != "finished" or not room.seat_of(uid):
+            raise RoomError("Реванш уже недоступний")
+        if room.meta.get("tournament"):
+            raise RoomError("У турнірі реваншу немає")
+        why = self.busy(uid)
+        if why:
+            raise RoomError(why)
+        room.rematch.add(uid)
+        need = {s.user_id for s in room.humans()}
+        if not need <= room.rematch:
+            await self.broadcast(room)
+            return
+        if room.meta.get("rematch_started"):
+            return
+        room.meta["rematch_started"] = True
+        players = []
+        for s in room.seats:
+            if s.bot:
+                players.append({"bot": {"name": s.name, "level": s.level, "back": s.back, "lvl": s.lvl,
+                                        "rating": s.rating, "emojis": s.emojis, "chatty": s.chatty}})
+            else:
+                players.append({"user_id": s.user_id})
+        try:
+            await self.create_fixed(players, room.mode, room.stake, room.rules, meta={"rematch": room.id},
+                                    name=room.name)
+        except RoomError as e:
+            room.meta["rematch_started"] = False
+            room.rematch.clear()
+            for s in room.humans():
+                await self.send(s.user_id, {"type": "error", "message": str(e), "key": e.key, "args": e.args_})
 
     async def leave(self, uid: int) -> None:
         room = self.current(uid)
@@ -466,14 +619,16 @@ class RoomManager:
                    for s in room.seats]
         deal = {"hands": g.initial_deal, "deck": g.initial_deck, "trump_card": g.trump_card}
         self.db.ex(
-            "INSERT INTO matches(id,created_at,mode,stake,rules,players,status,deal_enc) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO matches(id,created_at,mode,stake,rules,players,status,deal_enc,kind) VALUES(?,?,?,?,?,?,?,?,?)",
             (room.match_id, int(time.time()), room.mode, room.stake, json.dumps(room.rules.to_dict()),
-             json.dumps(players, ensure_ascii=False), "playing", self.cipher.encrypt(deal)),
+             json.dumps(players, ensure_ascii=False), "playing", self.cipher.encrypt(deal),
+             "tournament" if room.meta.get("tournament") else "rematch" if room.meta.get("rematch")
+             else "private" if room.private else "quick"),
         )
         today = time.strftime("%Y-%m-%d")
         for s in room.humans():
             self.db.ex("INSERT OR IGNORE INTO match_players(match_id,user_id) VALUES(?,?)", (room.match_id, s.user_id))
-            if room.mode == "free":
+            if room.mode == "free" and not room.meta.get("tournament"):
                 self.db.ex(
                     "UPDATE users SET free_count = CASE WHEN free_day=? THEN free_count+1 ELSE 1 END, free_day=? WHERE id=?",
                     (today, today, s.user_id),
@@ -684,6 +839,12 @@ class RoomManager:
                    (int(time.time()), json.dumps(room.result), room.match_id))
         self.log_event(room, None, "finish", room.result)
         await self._award_xp(room)
+        await self._record_progress(room)
+        for cb in self.on_finish:
+            try:
+                await cb(room)
+            except Exception:  # noqa: BLE001
+                log.exception("on_finish hook failed")
         if not g.draw:
             for s in room.seats:
                 if s.bot:
@@ -715,6 +876,25 @@ class RoomManager:
             self.db.ex("UPDATE users SET xp = xp + ? WHERE id=?", (gain, s.user_id))
             after = level_of(int(u["xp"] or 0) + gain) if u else 1
             await self.send(s.user_id, {"type": "xp", "gain": gain, "level": after, "levelup": after > before})
+
+    async def _record_progress(self, room: Room) -> None:
+        if not self.progress:
+            return
+        g = room.game
+        for s in room.humans():
+            outcome = "draw" if g.draw else ("loss" if g.loser == s.pid else "win")
+            res = self.progress.record_match(
+                s.user_id, outcome=outcome, size=room.size, ranked=room.ranked, cheating=room.rules.cheating,
+                counters=room.counters.get(s.pid, {}), surrendered=g.surrendered == s.pid)
+            if room.ranked:
+                opp = next((o for o in room.seats if o.pid != s.pid), None)
+                if opp:
+                    score = 0.5 if g.draw else (0.0 if g.loser == s.pid else 1.0)
+                    new, delta = self.progress.apply_elo(s.user_id, opp.rating, score)
+                    res["rating"] = {"value": new, "delta": delta}
+                    s.rating = new
+            if res["quests"] or res["achievements"] or res.get("rating"):
+                await self.send(s.user_id, {"type": "progress", **res})
 
     async def admin_cancel(self, admin_id: int, room_id: str, reason: str) -> None:
         room = self.rooms.get(room_id)

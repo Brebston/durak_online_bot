@@ -1,6 +1,8 @@
-// Мʼякі звуки, синтезовані через Web Audio (без аудіофайлів).
-// sfx.play('card') — шурхіт кинутої карти, 'take' — збирання карт, 'beaten' — «бито»,
-// 'turn' — тихий дзвіночок «ваш хід», 'win'/'lose' — фінал, 'emoji' — «поп», 'coin' — покупка.
+// Звуки гри. Основні — короткі семпли з /sfx (синтезовані нами, див. frontend/tools/gen_sfx.py),
+// поки семпл не завантажився — запасний синтез через Web Audio.
+// card — карта на стіл, throw — підкинули, defend — відбилися, draw — карта з колоди, deal — роздача,
+// take — забрав карти, beaten — «бито», turn — ваш хід, win/lose/tie — фінал, catch — спіймали мухляра,
+// achievement — досягнення, emoji, coin, click.
 
 let ctx
 let master
@@ -101,19 +103,64 @@ const SOUNDS = {
   click(t) { swish(t, { dur: 0.03, freq: 4000, vol: 0.15 }) },
 }
 
+// варіанти, щоб однакові дії не звучали як «копія»
+const SAMPLES = {
+  card: ['card0', 'card1', 'card2'], throw: ['throw0', 'throw1', 'throw2'], defend: ['defend0', 'defend1', 'defend2'],
+  draw: ['draw0', 'draw1', 'draw2'], deal: ['deal'], take: ['take'], beaten: ['beaten'], turn: ['turn'], win: ['win'],
+  lose: ['lose'], tie: ['tie'], coin: ['coin'], emoji: ['emoji'], catch: ['catch'], achievement: ['achievement'], click: ['click'],
+}
+const VOLUME = { turn: 0.8, emoji: 0.8, draw: 0.7, click: 0.6 }
+const FALLBACK = { throw: 'card', defend: 'card', draw: 'click', tie: 'turn', catch: 'take', achievement: 'win' }
+const buffers = {}
+let loading = false
+
+function loadSamples() {
+  if (loading || !ctx) return
+  loading = true
+  const files = [...new Set(Object.values(SAMPLES).flat())]
+  files.forEach((f) => {
+    fetch(`/sfx/${f}.mp3`)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+      .then((b) => new Promise((ok, bad) => ctx.decodeAudioData(b, ok, bad)))
+      .then((buf) => { buffers[f] = buf })
+      .catch(() => { /* лишається синтез */ })
+  })
+}
+
+function playSample(name, at) {
+  const list = SAMPLES[name]
+  if (!list) return false
+  const f = list[Math.floor(Math.random() * list.length)]
+  const buf = buffers[f]
+  if (!buf) return false
+  const src = ctx.createBufferSource()
+  src.buffer = buf
+  src.playbackRate.value = list.length > 1 ? 0.96 + Math.random() * 0.08 : 1   // легка жива варіація
+  const g = ctx.createGain()
+  g.gain.value = VOLUME[name] ?? 1
+  src.connect(g).connect(master)
+  src.start(at)
+  return true
+}
+
 export const sfx = {
   setEnabled(v) { enabled = !!v },
-  play(name) {
+  play(name, delay = 0) {
     if (!enabled) return
     try {
       const c = ac()
-      if (c && SOUNDS[name]) SOUNDS[name](c.currentTime + 0.01)
+      if (!c) return
+      loadSamples()
+      const at = c.currentTime + 0.01 + delay
+      if (playSample(name, at)) return
+      const synth = SOUNDS[name] || SOUNDS[FALLBACK[name]]
+      if (synth) synth(at)
     } catch { /* ignore */ }
   },
 }
 
 // iOS/Telegram дозволяють звук лише після першого дотику
 if (typeof window !== 'undefined') {
-  const unlock = () => { try { ac() } catch { /* ignore */ } window.removeEventListener('pointerdown', unlock) }
+  const unlock = () => { try { ac(); loadSamples() } catch { /* ignore */ } window.removeEventListener('pointerdown', unlock) }
   window.addEventListener('pointerdown', unlock)
 }

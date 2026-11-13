@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { t } from '../i18n.js'
+import Tournaments from './Tournaments.jsx'
 
 function Seg({ value, options, onChange }) {
   return (
@@ -12,7 +13,7 @@ function Seg({ value, options, onChange }) {
   )
 }
 
-export default function Lobby({ me, send }) {
+export default function Lobby({ me, send, toast, view: initialView }) {
   const modes = me.modes
   const [mode, setMode] = useState(modes.free ? 'free' : 'stake')
   const [size, setSize] = useState(2)
@@ -21,7 +22,7 @@ export default function Lobby({ me, send }) {
   const [stake, setStake] = useState(modes.stakes[0] || 10)
   const [turn, setTurn] = useState(30)
   const [cheating, setCheating] = useState(false)
-  const [view, setView] = useState('quick') // quick | rooms
+  const [view, setView] = useState(initialView || 'quick') // quick | rooms | tournaments
   const [rooms, setRooms] = useState(null)
   const [roomName, setRoomName] = useState('')
   const [listed, setListed] = useState(true)
@@ -36,10 +37,11 @@ export default function Lobby({ me, send }) {
 
   const fee = Math.floor((stake * modes.commission_percent) / 100)
   const share = Math.floor((stake - fee) / Math.max(1, size - 1))
-  const rules = { variant, deck_size: deck, turn_seconds: turn, cheating }
-  const params = { mode, size, stake: mode === 'stake' ? stake : 0, rules }
-  const tooFew = deck === 36 && size * 6 > 36
-  const noFree = mode === 'free' && me.free_left === 0
+  const ranked = mode === 'ranked' && view === 'quick'
+  const rules = ranked ? { variant, turn_seconds: 30 } : { variant, deck_size: deck, turn_seconds: turn, cheating }
+  const params = { mode: view === 'rooms' && mode === 'ranked' ? 'free' : mode, size: ranked ? 2 : size, stake: mode === 'stake' ? stake : 0, rules }
+  const tooFew = !ranked && deck === 36 && size * 6 > 36
+  const noFree = params.mode === 'free' && me.free_left === 0
   const noMoney = mode === 'stake' && me.available.chips < stake
   const disabled = tooFew || noFree || noMoney || me.banned
 
@@ -49,7 +51,11 @@ export default function Lobby({ me, send }) {
       <div className="seg big">
         <button className={view === 'quick' ? 'on' : ''} onClick={() => setView('quick')}>{t('⚡ Швидка гра')}</button>
         <button className={view === 'rooms' ? 'on' : ''} onClick={() => setView('rooms')}>{t('🚪 Кімнати')}</button>
+        {modes.tournaments !== false && <button className={view === 'tournaments' ? 'on' : ''} onClick={() => setView('tournaments')}>{t('🏆 Турніри')}</button>}
       </div>
+
+      {view === 'tournaments' && <Tournaments me={me} toast={toast} />}
+      {view !== 'tournaments' && (<>
 
       {view === 'rooms' && (
         <section className="card-box">
@@ -77,7 +83,9 @@ export default function Lobby({ me, send }) {
         <Seg value={mode} onChange={setMode} options={[
           ...(modes.free ? [['free', t('Безкоштовно')]] : []),
           ...(modes.stake ? [['stake', t('На фішки')]] : []),
+          ...(modes.ranked && view === 'quick' ? [['ranked', t('📈 Рейтингова')]] : []),
         ]} />
+        {ranked && <p className="hint">{t('1 на 1 проти суперника приблизно вашої сили. Перемога підвищує рейтинг, поразка — знижує. Ваш рейтинг:') + ' '}<b>{me.rating}</b></p>}
         {mode === 'free' && me.free_left !== null && (
           <p className="hint">{t('Безкоштовних ігор сьогодні:') + ' '}{me.free_left}</p>
         )}
@@ -91,6 +99,10 @@ export default function Lobby({ me, send }) {
 
       <section className="card-box">
         <h3>{t('Правила')}</h3>
+        {ranked ? (<>
+          <Seg value={variant} onChange={setVariant} options={[['podkidnoy', t('Підкидний')], ['perevodnoy', t('Перевідний')]]} />
+          <p className="hint">{t('Рейтингові правила: 1 на 1, 36 карт, 30 с на хід, без режиму «Шулер».')}</p>
+        </>) : (<>
         <Seg value={variant} onChange={setVariant} options={[['podkidnoy', t('Підкидний')], ['perevodnoy', t('Перевідний')]]} />
         <h4>{t('Гравців')}</h4>
         <Seg value={size} onChange={setSize} options={[[2, '2'], [3, '3'], [4, '4']]} />
@@ -103,6 +115,7 @@ export default function Lobby({ me, send }) {
         {cheating && <p className="hint">{t('Можна відбиватися будь-якою картою й підкидати будь-що. Помітили мухлювання — торкніться карти, і вона повернеться мухлярові.')}</p>}
         <h4>{t('Час на хід')}</h4>
         <Seg value={turn} onChange={setTurn} options={[[20, t('20 с')], [30, t('30 с')], [60, t('60 с')]]} />
+        </>)}
       </section>
 
       {mode === 'stake' && (
@@ -136,6 +149,7 @@ export default function Lobby({ me, send }) {
             onClick={() => send({ type: 'create', ...params, name: roomName, listed })}>{t('Створити')}</button>
         </section>
       )}
+      </>)}
     </div>
   );
 }

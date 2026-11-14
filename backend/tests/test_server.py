@@ -357,6 +357,69 @@ def test_admin_bank_endpoint(client):
     assert client.get("/api/admin/bank", headers={"Authorization": "dev 2"}).status_code == 403
 
 
+def test_replay_reconstructs_match(client):
+    auth = {"Authorization": "dev 303:Rep"}
+    m = play_vs_bots(client, 303, "free", size=2)
+    mid = m["room"]["match_id"]
+
+    rep = client.get(f"/api/replay/{mid}", headers=auth)
+    assert rep.status_code == 200
+    rep = rep.json()
+    assert rep["truncated_at"] is None          # рушій пройшов журнал до кінця
+    assert len(rep["frames"]) > 1
+    assert rep["revealed"] is False
+
+    # відтворений фінал збігається з результатом матчу
+    last = rep["frames"][-1]["view"]
+    assert last["status"] == "finished"
+    assert last["loser"] == m["result"]["loser"]
+    assert last["draw"] == bool(m["result"]["draw"])
+
+    # без reveal реплей не показує нічиїх карт
+    assert "hands" not in json.dumps(rep["frames"])
+    for f in rep["frames"]:
+        assert f["view"]["hand"] == [] and f["view"]["actions"] == []
+    # у безкоштовному режимі боти лишаються нерозрізненними, як і за столом
+    assert all(p["bot"] is False for p in rep["match"]["players"])
+
+
+def test_replay_reveal_is_audited(client):
+    auth = {"Authorization": "dev 304:Rev"}
+    mid = play_vs_bots(client, 304, "free", size=2)["room"]["match_id"]
+    rep = client.get(f"/api/replay/{mid}?reveal=1", headers=auth).json()
+    assert rep["revealed"] is True
+    hands = rep["frames"][0]["hands"]
+    cards = [c for h in hands.values() for c in h]
+    assert len(hands) == 2
+    assert len(cards) == 12 and len(set(cards)) == 12   # по 6 на руки, без повторів
+    # розкриття роздачі пишеться в аудит так само, як адмінське
+    assert main.S.db.one("SELECT 1 FROM audit WHERE action='replay_reveal' AND target=?", (mid,))
+
+
+def test_replay_only_own_finished_match(client):
+    mid = play_vs_bots(client, 305, "free", size=2)["room"]["match_id"]
+    # чужий матч — 404, щоб не підтверджувати його існування
+    assert client.get(f"/api/replay/{mid}", headers={"Authorization": "dev 306:Other"}).status_code == 404
+    assert client.get("/api/replay/nope", headers={"Authorization": "dev 305"}).status_code == 404
+    # активний матч реплею не має: карти не розкриваються під час гри
+    main.S.db.ex("UPDATE matches SET status='playing' WHERE id=?", (mid,))
+    assert client.get(f"/api/replay/{mid}", headers={"Authorization": "dev 305"}).status_code == 403
+    main.S.db.ex("UPDATE matches SET status='finished' WHERE id=?", (mid,))
+
+
+def test_replay_hides_cheat_marks(client):
+    auth = {"Authorization": "dev 307:Cheat"}
+    mid = play_vs_bots(client, 307, "free", size=2, rules={"cheating": True})["room"]["match_id"]
+    rep = client.get(f"/api/replay/{mid}?reveal=1", headers=auth).json()
+    # хто мухлював — знає лише сервер; у реплеї лишається сама дія
+    assert "cheater" not in json.dumps(rep)
+    for f in rep["frames"]:
+        assert not f["action"] or set(f["action"]) <= {"type", "card", "target"}
+    # адмін той самий матч бачить із позначками
+    adm = client.get(f"/api/admin/match/{mid}", headers={"Authorization": "dev 1"}).json()
+    assert any("cheat" in e["data"] for e in adm["events"] if e["type"] == "move")
+
+
 def test_withdrawal_request_reserve_survives_restart(client, tmp_path):
     db_file = tmp_path / "w.db"
     main.init_state(str(db_file))

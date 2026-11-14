@@ -11,6 +11,8 @@ export default function Shop({ me, reload, toast }) {
   const [shop, setShop] = useState(null)
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState(null)
+  const [gifting, setGifting] = useState(null)   // предмет, який даруємо
+  const [friends, setFriends] = useState(null)
 
   const load = useCallback(() => api('/api/shop').then(setShop).catch((e) => toast(e.message)), [toast])
   useEffect(() => { load() }, [load])
@@ -49,6 +51,24 @@ export default function Shop({ me, reload, toast }) {
       setShop((s) => ({ ...s, ...r }))
       reload()
     } catch (e) { toast(e.message) }
+  }
+  const openGift = async (item) => {
+    setGifting(item)
+    if (!friends) {
+      try {
+        setFriends((await api('/api/friends')).friends)
+      } catch (e) { toast(e.message); setGifting(null) }
+    }
+  }
+  const sendGift = async (friend) => {
+    setBusy(true)
+    try {
+      await api('/api/shop/gift', { user_id: friend.id, item_id: gifting.id })
+      sfx.play('coin')
+      toast(t('«{0}» подаровано: {1}', t(gifting.name), friend.name))
+      setGifting(null)
+      reload()
+    } catch (e) { toast(e.message) } finally { setBusy(false) }
   }
   const play = (item) => {
     setPreview(item)
@@ -97,6 +117,11 @@ export default function Shop({ me, reload, toast }) {
                   )}
                 </div>
                 <b>{t(item.name)}</b>
+                {item.price > 0 && !item.award && !item.level && (
+                  <button className="link gift-link" title={t('Подарувати другові')} onClick={() => openGift(item)}>
+                    {t('🎁 Подарувати')}
+                  </button>
+                )}
                 {equipped ? <span className="hint">{t('✓ Встановлено')}</span>
                   : owned ? (item.type === 'emoji'
                     ? <span className="hint">{t('✓ Ваше')}</span>
@@ -109,6 +134,29 @@ export default function Shop({ me, reload, toast }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {gifting && (
+        <div className="overlay" onClick={() => setGifting(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{t('🎁 Подарувати «{0}»', t(gifting.name))}</h3>
+            <p className="hint">{t('Ви платите {0} фішок. Друг отримає предмет у магазин — вдягне сам.', gifting.price)}</p>
+            {!friends && <div className="spinner" />}
+            {friends?.length === 0 && <p className="hint">{t('Подарунки можна надсилати лише друзям.')}</p>}
+            {friends?.length > 0 && (
+              <ul className="list">
+                {friends.map((f) => (
+                  <li key={f.id}>
+                    <div><b>{f.name}</b></div>
+                    <button className="btn small primary" disabled={busy || me.available.chips < gifting.price}
+                      onClick={() => sendGift(f)}>{gifting.price} <Chip /></button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button className="btn" onClick={() => setGifting(null)}>{t('Закрити')}</button>
+          </div>
         </div>
       )}
 

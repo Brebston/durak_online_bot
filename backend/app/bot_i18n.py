@@ -26,6 +26,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "{name} зовёт вас в «Дурака»{stake}",
     },
     "stake": {"uk": " (ставка {n})", "en": " (stake {n})", "pl": " (stawka {n})", "ru": " (ставка {n})"},
+    "turn_push": {
+        "uk": "Ваш хід у «Дураку» — ви пропустили його. Ще два пропуски, і буде зарахована поразка.",
+        "en": "It's your turn in Durak — you just missed it. Two more misses and the game is lost.",
+        "pl": "Twój ruch w Durniu — właśnie go pominąłeś. Jeszcze dwa pominięcia i mecz przepadnie.",
+        "ru": "Ваш ход в «Дураке» — вы его пропустили. Ещё два пропуска, и будет засчитано поражение.",
+    },
+    "back_to_game": {"uk": "↩ До гри", "en": "↩ Back to game", "pl": "↩ Wróć do gry", "ru": "↩ К игре"},
+    "gift_received": {
+        "uk": "🎁 {name} подарував вам «{item}». Предмет уже в магазині — лишилось вдягти.",
+        "en": "🎁 {name} sent you “{item}”. It's already in your shop — just equip it.",
+        "pl": "🎁 {name} podarował ci „{item}”. Przedmiot jest już w sklepie — wystarczy go założyć.",
+        "ru": "🎁 {name} подарил вам «{item}». Предмет уже в магазине — осталось надеть.",
+    },
     "id": {
         "uk": "Ваш Telegram ID: {id} ({role})", "en": "Your Telegram ID: {id} ({role})",
         "pl": "Twój Telegram ID: {id} ({role})", "ru": "Ваш Telegram ID: {id} ({role})",

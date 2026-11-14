@@ -11,7 +11,7 @@ const KIND = {
   player_transfer: t('Переказ фішок'),
 }
 
-export default function Profile({ me, reload, toast }) {
+export default function Profile({ me, reload, toast, onReplay }) {
   const [hist, setHist] = useState(null)
   const [view, setView] = useState('matches')
   const [ticket, setTicket] = useState('')
@@ -19,6 +19,14 @@ export default function Profile({ me, reload, toast }) {
   useEffect(() => { api('/api/history').then(setHist).catch((e) => toast(e.message)) }, [toast])
   useEffect(() => { api('/api/progress').then(setProg).catch(() => {}) }, [me.progress.xp])
   const pickTitle = (id) => api('/api/title', { title_id: id }).then(() => { reload(); api('/api/progress').then(setProg) }).catch((e) => toast(e.message))
+  const claimTier = async (tier) => {
+    try {
+      const r = await api('/api/season/claim', { tier })
+      toast(r.title ? t('Отримано титул «{0}» і +{1} XP', r.title, r.xp) : t('Отримано +{0} XP', r.xp))
+      setProg((p) => ({ ...p, pass: r.pass }))
+      reload()
+    } catch (e) { toast(e.message) }
+  }
   const st = me.stats
   const rate = st.played ? Math.round((st.wins / st.played) * 100) : 0
 
@@ -120,6 +128,40 @@ export default function Profile({ me, reload, toast }) {
               </li>
             ))}
           </ul>
+          {prog.pass && (
+            <>
+              <h4>{t('🎟 Пропуск сезону {0}', prog.pass.season)} · {prog.pass.points} {t('очок')}</h4>
+              <ul className="pass">
+                {prog.pass.tiers.map((x) => (
+                  <li key={x.tier} className={x.claimed ? 'done' : x.unlocked ? 'open' : ''}>
+                    <div>
+                      <b>{x.tier}</b>
+                      <small>{x.points} {t('очок')} · +{x.xp} XP{x.title ? ' · ' + t('титул') : ''}</small>
+                    </div>
+                    {x.claimed ? <span className="hint">{t('✓ Отримано')}</span>
+                      : x.unlocked ? <button className="btn small primary" onClick={() => claimTier(x.tier)}>{t('Забрати')}</button>
+                        : <span className="lock">🔒</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {prog.weekly?.length > 0 && (
+            <>
+              <h4>{t('Завдання тижня')}</h4>
+              <ul className="quests">
+                {prog.weekly.map((q) => (
+                  <li key={q.qid} className={q.done ? 'done' : ''}>
+                    <div>
+                      <span>{q.done ? '✅ ' : ''}{t(q.text, q.target)}</span>
+                      <div className="xpbar"><i style={{ width: `${(100 * q.progress) / q.target}%` }} /></div>
+                    </div>
+                    <small>{q.progress}/{q.target} · +{q.reward} XP</small>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <h4>{t('Досягнення')} · {prog.achievements.filter((a) => a.unlocked).length}/{prog.achievements.length}</h4>
           <div className="badges">
             {prog.achievements.map((a) => (
@@ -148,9 +190,14 @@ export default function Profile({ me, reload, toast }) {
                   <small>{m.variant === 'perevodnoy' ? t('Перевідний') : t('Підкидний')} · vs {m.opponents.join(', ')}</small>
                   <small>{new Date(m.created_at * 1000).toLocaleString('uk-UA')} · №{m.id}</small>
                 </div>
-                <b className={m.delta > 0 ? 'plus' : m.delta < 0 ? 'minus' : ''}>
-                  {m.mode === 'stake' ? `${m.delta > 0 ? '+' : ''}${m.delta}` : 'free'}
-                </b>
+                <div className="match-right">
+                  <b className={m.delta > 0 ? 'plus' : m.delta < 0 ? 'minus' : ''}>
+                    {m.mode === 'stake' ? `${m.delta > 0 ? '+' : ''}${m.delta}` : 'free'}
+                  </b>
+                  {m.outcome !== 'playing' && onReplay && (
+                    <button className="btn small" title={t('Переглянути реплей')} onClick={() => onReplay(m.id)}>▶</button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

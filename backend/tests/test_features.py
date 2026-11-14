@@ -206,3 +206,222 @@ def test_tournament_surrender_means_out(client):
     v = client.get(f"/api/tournaments/{t8['id']}", headers=H(uid)).json()
     mine = next(g for g in v["rounds"][0] if g["me"])
     assert mine["winner"] == (0 if mine["b"] == f"Player{uid}" else 1)
+
+
+def test_turn_push_sent_once_when_player_misses_move(client):
+    """Пропущений хід → одне нагадування в Telegram. Ботам — ніколи, двічі за матч — ні."""
+    sent = []
+
+    async def fake_notify(uid, room_id):
+        sent.append((uid, room_id))
+
+    main.S.rooms.notify_turn = fake_notify
+    try:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_text(json.dumps({"auth": "dev 960:Away"}))
+            recv_until(ws, lambda m: m["type"] == "hello")
+            ws.send_text(json.dumps({"type": "find", "mode": "free", "size": 2, "stake": 0,
+                                     "rules": {"variant": "podkidnoy"}}))
+            # НЕ ходимо, імітуючи згорнутий застосунок
+            m = recv_until(ws, lambda m: m["type"] == "room" and m.get("game"))
+            rid = m["room"]["id"]
+            room = main.S.rooms.rooms[rid]
+
+            # Дедлайн гасимо в циклі, а не один раз: між читанням кадру й записом
+            # могла пройти черга бота, і тоді ходу від нас ще не чекають.
+            for _ in range(60):        # таймер оглядає кімнати раз на 0.5 с
+                if sent:
+                    break
+                room.deadline = 0
+                time.sleep(0.2)
+            assert sent == [(960, rid)]
+
+            # повернувся, походив і знову відійшов — другого нагадування немає
+            seat = room.seat_by_pid("u960")
+            if seat:
+                seat.timeouts = 0
+                assert seat.turn_push is True
+            room.deadline = 0
+            time.sleep(1.2)
+            assert len(sent) == 1
+    finally:
+        main.S.rooms.notify_turn = None
+
+
+def test_weekly_quests_live_beside_daily(client):
+    """Тижневі — той самий механізм, інший період: більша ціль і нагорода."""
+    from app.progress import QUEST_KINDS, WEEK_TARGET_SCALE
+
+    db = main.S.db
+    db.upsert_user(970, "Weekly", None)
+    pr = Progress(db)
+    daily, weekly = pr.quests(970), pr.weekly(970)
+    assert len(daily) == 3 and len(weekly) == 3
+    assert all("-W" in q["day"] for q in weekly)
+    assert all("-W" not in q["day"] for q in daily)
+    for q in weekly:
+        base = QUEST_KINDS[q["qid"]][1]
+        assert q["target"] in [b * WEEK_TARGET_SCALE for b in base]
+
+    # один матч рухає обидва набори
+    done = pr._bump_quests(970, {k: 99 for k in QUEST_KINDS})
+    assert any(d["weekly"] for d in done), done
+    assert any(not d["weekly"] for d in done), done
+
+
+def test_head_to_head_counts_only_duels(client):
+    db = main.S.db
+    pr = Progress(db)
+    for uid in (980, 981, 982):
+        db.upsert_user(uid, f"P{uid}", None)
+
+    def rec(mid, players, result):
+        db.ex("INSERT INTO matches(id,created_at,mode,stake,rules,players,status,result) VALUES(?,?,?,?,?,?,?,?)",
+              (mid, int(time.time()), "free", 0, "{}", json.dumps([]), "finished", json.dumps(result)))
+        for u in players:
+            db.ex("INSERT OR IGNORE INTO match_players(match_id,user_id) VALUES(?,?)", (mid, u))
+
+    rec("h2h1", [980, 981], {"loser": "u981"})
+    rec("h2h2", [980, 981], {"loser": "u980"})
+    rec("h2h3", [980, 981], {"draw": True})
+    rec("h2h4", [980, 981, 982], {"loser": "u982"})   # програв третій — не очна зустріч
+
+    assert pr.head_to_head(980, 981) == {"played": 4, "wins": 1, "losses": 1, "draws": 1}
+    assert pr.head_to_head(981, 980) == {"played": 4, "wins": 1, "losses": 1, "draws": 1}
+    assert pr.head_to_head(980, 982)["played"] == 1
+
+
+def test_gift_cosmetic_to_friend():
+    """Подарунок: платить дарувальник, предмет — другові, фішки йдуть у банк, не гравцю.
+
+    На власній БД: подарунок переводить фішки в банк гри, а він спільний для всіх
+    тестових модулів (вони ділять один файл) — псувати його балансні перевірки не можна.
+    """
+    from app.db import DB
+    from app.ledger import BANK, Ledger
+    from app.shop import Shop, ShopError
+
+    db = DB(":memory:")
+    giver, friend = 985, 986
+    for uid in (giver, friend):
+        db.upsert_user(uid, f"P{uid}", None)
+    led = Ledger(db)
+    led.post(f"u:{giver}", 1000, "deposit")
+    shop = Shop(db, led)
+
+    bank_before = led.balance(BANK)
+    shop.gift(giver, friend, "back_navy")                 # 100 фішок
+
+    assert "back_navy" in shop.owned(friend)              # предмет у друга
+    assert "back_navy" not in shop.owned(giver)           # і не в дарувальника
+    assert shop.equipped(friend)["back"] != "back_navy"   # вдягає сам
+    assert led.balance(f"u:{friend}") == 0                # це не переказ фішок
+    assert led.balance(f"u:{giver}") == 900
+    assert led.balance(BANK) == bank_before + 100         # оплата йде в банк гри
+
+    for bad in (
+        lambda: shop.gift(giver, friend, "back_navy"),    # вже є
+        lambda: shop.gift(giver, giver, "back_carbon"),   # самому собі
+        lambda: shop.gift(giver, friend, "back_classic"), # безкоштовний
+        lambda: shop.gift(giver, friend, "back_champion"),# лише нагорода
+    ):
+        with pytest.raises(ShopError):
+            bad()
+
+
+def test_gift_only_to_friends(client):
+    """Ендпоінт: чужому гравцю подарунок не йде (фішки при цьому не рухаються)."""
+    client.get("/api/me", headers=H(987))
+    r = client.post("/api/shop/gift", json={"user_id": 988, "item_id": "back_carbon"}, headers=H(987))
+    assert r.status_code == 403
+
+
+def test_daily_deal_is_identical_for_everyone(client):
+    """Роздача дня: однакові карти всім, одна спроба на добу, своя таблиця."""
+    hands = {}
+    for uid in (991, 992):
+        client.get("/api/me", headers=H(uid))
+        with client.websocket_connect("/ws") as ws:
+            ws.send_text(json.dumps({"auth": f"dev {uid}:D{uid}"}))
+            recv_until(ws, lambda m: m["type"] == "hello")
+            r = client.post("/api/daily", headers=H(uid))
+            assert r.status_code == 200, r.text
+            m = recv_until(ws, lambda m: m["type"] == "room" and m.get("game"))
+            g = m["game"]
+            hands[uid] = sorted(g["hand"])
+            assert g["trump_card_shown"]
+            trump = g["trump_card_shown"]
+            ws.send_text(json.dumps({"type": "surrender"}))
+            recv_until(ws, lambda m: m["type"] == "room" and m["room"]["status"] == "finished")
+
+    assert hands[991] == hands[992], "роздача дня має бути однаковою"
+    assert len(hands[991]) == 6
+
+    # друга спроба за добу — ні
+    assert client.post("/api/daily", headers=H(991)).status_code == 409
+
+    d = client.get("/api/daily", headers=H(991)).json()
+    assert d["played"] is True
+    assert {r["user_id"] for r in d["top"]} >= {991, 992}
+    assert d["me"]["outcome"] == "loss"          # здався
+    assert trump
+
+
+def test_season_pass_unlocks_and_claims_once(client):
+    from app.progress import SEASON_PASS
+
+    db = main.S.db
+    db.upsert_user(995, "Pass", None)
+    pr = Progress(db)
+    sid = season_id()
+
+    p = pr.season_pass(995, sid)
+    assert p["points"] == 0 and p["claimable"] == 0
+    assert all(not x["unlocked"] for x in p["tiers"])
+
+    # очки сезону — ті самі, що в таблиці лідерів
+    first = SEASON_PASS[0]
+    db.ex("INSERT INTO match_points(user_id,points,created_at) VALUES(?,?,?)",
+          (995, first["points"], int(time.time())))
+    p = pr.season_pass(995, sid)
+    assert p["points"] == first["points"] and p["claimable"] == 1
+    assert p["tiers"][0]["unlocked"] and not p["tiers"][0]["claimed"]
+
+    xp_before = db.user(995)["xp"] or 0
+    got = pr.claim_season_tier(995, first["tier"], sid)
+    assert got["xp"] == first["xp"]
+    assert (db.user(995)["xp"] or 0) == xp_before + first["xp"]
+    assert pr.season_pass(995, sid)["claimable"] == 0
+
+    with pytest.raises(ValueError):            # двічі одну нагороду — ні
+        pr.claim_season_tier(995, first["tier"], sid)
+    with pytest.raises(ValueError):            # закритий рівень — ні
+        pr.claim_season_tier(995, SEASON_PASS[-1]["tier"], sid)
+
+    # останній рівень дає титул
+    db.ex("INSERT INTO match_points(user_id,points,created_at) VALUES(?,?,?)",
+          (995, SEASON_PASS[-1]["points"], int(time.time())))
+    last = pr.claim_season_tier(995, SEASON_PASS[-1]["tier"], sid)
+    assert last["title"] and sid in last["title"]
+    assert any(sid in tl["label"] for tl in pr.titles(995))
+
+
+def test_tutorial_match_does_not_spend_daily_free_limit(client):
+    uid = 996
+    assert client.get("/api/me", headers=H(uid)).json()["tutorial_done"] is False
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"auth": f"dev {uid}:Novice"}))
+        recv_until(ws, lambda m: m["type"] == "hello")
+        assert client.post("/api/tutorial", headers=H(uid)).status_code == 200
+        m = recv_until(ws, lambda m: m["type"] == "room" and m.get("game"))
+        assert m["room"]["tutorial"] is True          # клієнт знає, що показувати підказки
+        assert len(m["game"]["hand"]) == 6
+        ws.send_text(json.dumps({"type": "surrender"}))
+        recv_until(ws, lambda m: m["type"] == "room" and m["room"]["status"] == "finished")
+
+    me = client.get("/api/me", headers=H(uid)).json()
+    assert me["tutorial_done"] is True
+    # денний ліміт безкоштовних ігор навчання не витрачає
+    u = main.S.db.user(uid)
+    assert (u["free_count"] or 0) == 0
+    assert main.S.db.one("SELECT kind FROM matches WHERE kind='tutorial' LIMIT 1")

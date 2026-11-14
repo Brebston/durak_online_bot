@@ -362,3 +362,51 @@ select { width: 100%; padding: 9px 10px; border-radius: 10px; border: 1px solid 
 .bar small { position: absolute; top: -2px; font-size: 9px; color: var(--muted); }
 .bar em { font-style: normal; font-size: 9px; color: var(--muted); margin-top: 2px; }
 .list li.unseen { background: rgba(229,72,77,.1); border-radius: 8px; }
+
+/* ---------- Реплей матчу ---------- */
+.replay-screen {
+  height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt2) 70%, #0a3022 100%);
+  overflow-y: auto;
+}
+.replay-head { display: flex; align-items: center; gap: 12px; }
+.replay-head small { display: block; }
+.replay-warn { color: var(--gold); }
+.replay-board { display: flex; flex-direction: column; gap: 10px; }
+.replay-side { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.replay-side b { color: var(--text); }
+.replay-players { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.replay-players li {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: var(--panel); border-radius: 10px;
+}
+.replay-players li.att { box-shadow: inset 3px 0 0 var(--gold); }
+.replay-players li.def { box-shadow: inset 3px 0 0 var(--blue); }
+.replay-players li small { color: var(--muted); font-size: 12px; }
+.replay-players li > b { margin-left: auto; }
+.replay-hand { display: flex; flex-wrap: wrap; gap: 3px; margin-left: auto; justify-content: flex-end; }
+.replay-table { min-height: 112px; align-content: flex-start; }
+.replay-step { text-align: center; font-weight: 600; min-height: 20px; }
+.replay-controls { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+.replay-buttons { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.replay-buttons .btn { width: auto; padding: 8px 14px; }
+.match-right { display: flex; align-items: center; gap: 10px; }
+.match-right .btn.small { padding: 5px 10px; }
+.h2h { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 10px; }
+.h2h b { font-size: 22px; }
+.h2h small { margin-left: 8px; }
+.gift-link { font-size: 12px; padding: 2px 0; }
+.daily-box h3 { margin-top: 0; }
+.pass { list-style: none; padding: 0; margin: 6px 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.pass li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; background: var(--panel); border-radius: 10px; opacity: .55; }
+.pass li.open { opacity: 1; box-shadow: inset 3px 0 0 var(--gold); }
+.pass li.done { opacity: 1; }
+.pass li > div { display: flex; align-items: baseline; gap: 10px; }
+.pass li b { font-size: 18px; min-width: 18px; }
+.pass li small { color: var(--muted); }
+.tutor-hint {
+  position: absolute; left: 10px; right: 10px; top: 96px; z-index: 5;
+  background: rgba(0,0,0,.72); border: 1px solid var(--gold); border-radius: 10px;
+  padding: 8px 10px; text-align: center; font-size: 13px; line-height: 1.3;
+}
+.tutor-box h3 { margin-top: 0; }

@@ -181,6 +181,27 @@ function statusText(game, myId) {
   return acts.some((a) => a.type === 'pass') ? t('Підкиньте або «Бито»') : t('Можна підкинути');
 }
 
+/** Підказка новачкові: пояснює не «що сталося», а що саме зробити зараз. */
+function tutorialHint(game, myId) {
+  if (!game || game.status !== 'playing') return ''
+  const acts = game.actions || []
+  if (!game.table.length && game.attacker === myId) {
+    return t('Ваш хід: перетягніть карту з руки на стіл. Підсвічені — ті, якими можна зайти.')
+  }
+  if (game.defender === myId) {
+    if (game.taking) return t('Ви берете карти — суперник ще може підкинути.')
+    if (acts.some((a) => a.type === 'defend')) {
+      return t('Відбийтесь: перетягніть на карту суперника старшу тієї ж масті або будь-який козир.')
+    }
+    return t('Відбитись нічим — натисніть «Беру», і карти підуть до вас.')
+  }
+  if (game.table.length && acts.some((a) => a.type === 'attack')) {
+    return t('Можна підкинути карту такого ж рангу, як уже на столі, або натиснути «Бито».')
+  }
+  if (acts.some((a) => a.type === 'pass')) return t('Більше підкидати нічого — натисніть «Бито».')
+  return t('Зачекайте: зараз ходить суперник.')
+}
+
 function Table({ data, me, send, left, onExit, onAgain, serverNow, toast }) {
   const [cardOf, setCardOf] = useState(null)
   const { room, game, result, last } = data
@@ -586,6 +607,7 @@ function Table({ data, me, send, left, onExit, onAgain, serverNow, toast }) {
 
       {catchMsg && <div className={`catch-banner ${catchMsg.ok ? 'ok' : ''}`}>{catchMsg.ok ? '🚨 ' : '🤷 '}{catchMsg.text}</div>}
       {room.rules.cheating && playing && <div className="cheat-hint">{t('🃏 Шулер: торкніться підозрілої карти, щоб спіймати')}</div>}
+      {room.tutorial && playing && <div className="tutor-hint">{tutorialHint(game, myId)}</div>}
 
       {draws && draws.map((f) => (
         <div key={f.id} data-id={f.id} className={`back draw-back cb-${me.cosmetics?.back || 'back_classic'}`}

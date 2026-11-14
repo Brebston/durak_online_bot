@@ -78,6 +78,22 @@ class TgBot:
         except Exception:  # noqa: BLE001
             log.info("cannot notify %s", uid)
 
+    async def notify_turn(self, uid: int, room_id: str) -> None:
+        """Нагадування тому, хто пропустив хід (якщо він не вимкнув сповіщення).
+
+        Кнопка веде одразу в ту саму кімнату, а не в головне меню: гравець має
+        встигнути повернутись, поки матч не завершився автоздачею.
+        """
+        u = self.db.user(uid)
+        if not u or not u["notify"]:
+            return
+        lang = pick_lang(u.get("lang"), None)
+        try:
+            await self.bot.send_message(uid, bt(lang, "turn_push"),
+                                        reply_markup=self.webapp_button(bt(lang, "back_to_game"), room=room_id))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify %s", uid)
+
     async def notify_text(self, uid: int, key: str) -> None:
         """Коротке сповіщення з кнопкою «Грати» (якщо гравець не вимкнув сповіщення). key — ключ bot_i18n."""
         u = self.db.user(uid)

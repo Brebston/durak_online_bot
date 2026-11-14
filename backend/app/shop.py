@@ -128,6 +128,36 @@ class Shop:
         if item["type"] in SLOTS:
             self.equip(uid, item_id)
 
+    def gift(self, uid: int, to: int, item_id: str) -> dict:
+        """Купити предмет другові. Платить дарувальник, фішки так само йдуть у банк гри.
+
+        Подарунок НЕ вдягається автоматично: зовнішній вигляд обирає лише власник.
+        Переказати фішки через подарунок не можна — отримувач дістає предмет, а не гроші.
+        """
+        item = BY_ID.get(item_id)
+        if not item:
+            raise ShopError("Предмет не знайдено")
+        if uid == to:
+            raise ShopError("Подарунок — це для когось іншого")
+        if item.get("level"):
+            raise ShopError("Відкривається на рівні {0}", item["level"])
+        if item.get("award"):
+            raise ShopError("Цю сорочку можна лише виграти")
+        if not item["price"]:
+            raise ShopError("Цей предмет і так безкоштовний")
+        if item_id in self.owned(to):
+            raise ShopError("У гравця вже є цей предмет")
+        try:
+            ok = self.ledger.transfer(acc(uid), BANK, item["price"], "shop_gift", ref=item_id,
+                                      reason=item["name"], idem=f"gift:{uid}:{to}:{item_id}")
+        except LedgerError as e:
+            raise ShopError(str(e))
+        if not ok:
+            raise ShopError("Цей подарунок уже надіслано")
+        self.db.ex("INSERT OR IGNORE INTO inventory(user_id,item_id,created_at) VALUES(?,?,?)",
+                   (to, item_id, int(time.time())))
+        return {"item_id": item_id, "name": item["name"], "price": item["price"]}
+
     def equip(self, uid: int, item_id: str) -> dict:
         item = BY_ID.get(item_id)
         if not item or item["type"] not in SLOTS:

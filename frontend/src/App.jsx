@@ -10,6 +10,7 @@ import Friends from './screens/Friends.jsx'
 import Admin from './screens/Admin.jsx'
 import Leaderboard from './screens/Leaderboard.jsx'
 import Withdrawals from './screens/Withdrawals.jsx'
+import Replay from './screens/Replay.jsx'
 import { lang, t } from './i18n.js'
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
   const [tick, setTick] = useState(0) // зміни в друзях/повідомленнях
   const [daily, setDaily] = useState(null) // нагорода за серію днів
   const [lobbyView, setLobbyView] = useState('quick')
+  const [replay, setReplay] = useState(null) // id матчу, який переглядаємо
   const sock = useRef(null)
   const lastFind = useRef(null)
 
@@ -154,6 +156,15 @@ export default function App() {
     );
   }
 
+  if (replay) {
+    return (
+      <>
+        <Replay matchId={replay} onClose={() => setReplay(null)} toast={toast} />
+        {err && <div className="toast">{err}</div>}
+      </>
+    );
+  }
+
   const badge = (me.friend_requests || 0) + (me.unread || 0)
   const tabs = [
     ['play', '🃏', t('Грати')],
@@ -179,7 +190,7 @@ export default function App() {
         {tab === 'friends' && <Friends me={me} toast={toast} reloadMe={loadMe} incoming={dm} tick={tick} />}
         {tab === 'shop' && <Shop me={me} reload={loadMe} toast={toast} />}
         {tab === 'withdrawals' && <Withdrawals me={me} reload={loadMe} toast={toast} />}
-        {tab === 'profile' && <Profile me={me} reload={loadMe} toast={toast} />}
+        {tab === 'profile' && <Profile me={me} reload={loadMe} toast={toast} onReplay={setReplay} />}
         {tab === 'admin' && me.is_admin && <Admin me={me} toast={toast} reloadMe={loadMe} />}
       </main>
       <nav className="tabbar">

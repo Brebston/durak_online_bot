@@ -46,7 +46,8 @@ class Seat:
     bot: bool = False
     level: str | None = None
     hold_id: int | None = None
-    timeouts: int = 0
+    timeouts: int = 0        # пропущені ходи ПОСПІЛЬ: скидається після кожного власного ходу
+    turn_push: bool = False  # нагадування «ваш хід» уже надсилали (один раз за матч)
     back: str = "back_classic"
     emojis: list[str] = field(default_factory=list)  # смайлики бота
     chatty: float = 0.0                               # наскільки бот емоційний
@@ -128,6 +129,9 @@ class RoomManager:
         self.social = social
         # викликається, якщо запрошений друг не в мережі: (uid, text, room_id) -> None
         self.notify_offline: Callable[[int, str, int, str], Awaitable[None]] | None = None
+        # нагадування гравцеві, який пропустив хід: (uid, room_id) -> None
+        self.notify_turn: Callable[[int, str], Awaitable[None]] | None = None
+        self._tasks: set[asyncio.Task] = set()
         self.online: Callable[[int], bool] = lambda uid: False
         self.db = db
         self.ledger = ledger
@@ -186,6 +190,7 @@ class RoomManager:
                 # у грі на фішки позначка бота лишається (гравці платять Stars)
                 "seats": [s.public(uid, hide_bot=room.mode != "stake") for s in room.seats],
                 "ranked": room.ranked, "tournament": room.meta.get("tournament"),
+                "tutorial": bool(room.meta.get("tutorial")),
                 "rematch": [room.seat_of(u).name for u in room.rematch if room.seat_of(u)],
                 "deadline": room.deadline, "now": time.time(),
                 "terms": self.terms(room), "invite": self.invite_link(room),
@@ -611,8 +616,14 @@ class RoomManager:
         room.fill_at = 0
         if room.fill_task and room.fill_task is not asyncio.current_task():
             room.fill_task.cancel()
-        self.rng.shuffle(room.seats)
-        room.game = Game([s.pid for s in room.seats], room.rules)
+        seed = room.meta.get("seed")
+        if seed is None:
+            self.rng.shuffle(room.seats)
+        else:
+            # «Роздача дня»: однакові карти для всіх. Тасувати місця не можна —
+            # роздача йде по порядку гравців, тож людина завжди має бути першою.
+            room.seats.sort(key=lambda s: (s.bot, s.pid))
+        room.game = Game([s.pid for s in room.seats], room.rules, seed=seed)
         room.match_id = f"{time.strftime('%y%m%d')}-{secrets.token_hex(4)}"
         g = room.game
         players = [{"pid": s.pid, "name": s.name, "user_id": s.user_id, "bot": s.bot, "level": s.level}
@@ -622,13 +633,16 @@ class RoomManager:
             "INSERT INTO matches(id,created_at,mode,stake,rules,players,status,deal_enc,kind) VALUES(?,?,?,?,?,?,?,?,?)",
             (room.match_id, int(time.time()), room.mode, room.stake, json.dumps(room.rules.to_dict()),
              json.dumps(players, ensure_ascii=False), "playing", self.cipher.encrypt(deal),
+             "tutorial" if room.meta.get("tutorial") else
+             "daily" if room.meta.get("daily") else
              "tournament" if room.meta.get("tournament") else "rematch" if room.meta.get("rematch")
              else "private" if room.private else "quick"),
         )
         today = time.strftime("%Y-%m-%d")
         for s in room.humans():
             self.db.ex("INSERT OR IGNORE INTO match_players(match_id,user_id) VALUES(?,?)", (room.match_id, s.user_id))
-            if room.mode == "free" and not room.meta.get("tournament"):
+            # навчальна гра й турнір не витрачають денний ліміт безкоштовних
+            if room.mode == "free" and not room.meta.get("tournament") and not room.meta.get("tutorial"):
                 self.db.ex(
                     "UPDATE users SET free_count = CASE WHEN free_day=? THEN free_count+1 ELSE 1 END, free_day=? WHERE id=?",
                     (today, today, s.user_id),
@@ -769,6 +783,17 @@ class RoomManager:
             log.exception("bot loop crashed")
 
     # ---------- таймер ----------
+    def _spawn(self, coro) -> None:
+        """Фонова задача, що не має тримати кімнату (мережа до Telegram)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            coro.close()
+            return
+        t = loop.create_task(coro)
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
     async def _timer_loop(self, room: Room) -> None:
         try:
             while room.status == "playing":
@@ -788,6 +813,13 @@ class RoomManager:
                             continue
                         if not seat.bot:
                             seat.timeouts += 1
+                            # Пропущений хід — надійна ознака, що гравця немає за столом:
+                            # випадково не пропустиш, таймер 20–60 с. Нагадуємо, поки
+                            # лишаються ще спроби, і лише раз за матч — щоб не спамити
+                            # тому, хто повернувся й знову відійшов.
+                            if seat.timeouts == 1 and not seat.turn_push and seat.user_id and self.notify_turn:
+                                seat.turn_push = True
+                                self._spawn(self.notify_turn(seat.user_id, room.id))
                             if seat.timeouts >= MAX_TIMEOUTS:
                                 g.surrender(pid)
                                 self.log_event(room, pid, "afk_surrender", {})

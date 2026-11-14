@@ -20,10 +20,12 @@ from .bot_i18n import bt, pick_lang
 from .config import settings
 from .crypto import DealCipher
 from .db import DB
+from .game.engine import Rules
 from .ledger import BANK, Ledger, LedgerError, acc
 from .levels import level_of, progress
 from .ops import Ops
-from .progress import ACHIEVEMENTS, Progress, season_id
+from .progress import ACHIEVEMENTS, Progress, daily_seed, day_bounds, season_id, today
+from .replay import ReplayError, build_replay
 from .rooms import RoomError, RoomManager
 from .shop import CATALOG, Shop, ShopError
 from .social import Social, SocialError
@@ -146,6 +148,7 @@ async def lifespan(app: FastAPI):
         await S.tg.start()
         S.rooms.bot_username = S.tg.username
         S.rooms.notify_offline = S.tg.notify_invite
+        S.rooms.notify_turn = S.tg.notify_turn
         S.tournaments.notify_offline = S.tg.notify_text
         S.ops.tg = S.tg
         task = asyncio.create_task(S.tg.run_polling())
@@ -278,6 +281,7 @@ async def me(user: dict = Depends(current_user)):
         "id": u["id"], "name": u["name"], "username": u["username"],
         "daily": daily, "streak": u["streak"] or 0, "rating": u["rating"] or 1000, "title": u["title"],
         "quests_left": sum(1 for q in S.progress.quests(user["id"]) if not q["done"]),
+        "tutorial_done": _tutorial_done(user["id"]),
         "balance": {"chips": S.ledger.balance(a)},
         "available": {"chips": S.ledger.available(a)},
         "stats": user_stats(user["id"]),
@@ -388,6 +392,37 @@ async def shop_buy(body: ItemIn, user: dict = Depends(current_user)):
     except ShopError as e:
         raise HTTPException(400, str(e))
     return {"owned": sorted(S.shop.owned(user["id"])), "equipped": S.shop.equipped(user["id"])}
+
+
+class GiftIn(BaseModel):
+    user_id: int
+    item_id: str
+
+
+@app.post("/api/shop/gift")
+async def shop_gift(body: GiftIn, user: dict = Depends(current_user)):
+    """Подарувати другові предмет із магазину (платить дарувальник)."""
+    if not S.social.are_friends(user["id"], body.user_id):
+        raise HTTPException(403, "Дарувати можна лише друзям")
+    recipient = S.db.user(body.user_id)
+    if not recipient:
+        raise HTTPException(404, "Гравця не знайдено")
+    try:
+        gift = S.shop.gift(user["id"], body.user_id, body.item_id)
+    except ShopError as e:
+        raise HTTPException(400, str(e))
+
+    await send_to_user(user["id"], {"type": "balance"})
+    await send_to_user(body.user_id, {"type": "balance"})
+    if S.tg:
+        lang = pick_lang(recipient.get("lang"), None)
+        try:
+            await S.tg.bot.send_message(
+                body.user_id, bt(lang, "gift_received", name=user["name"], item=gift["name"]),
+                reply_markup=S.tg.webapp_button(bt(lang, "play")))
+        except Exception:  # noqa: BLE001
+            log.info("cannot notify %s about gift", body.user_id)
+    return {"ok": True, "to": body.user_id, **gift, "balance": S.ledger.balance(acc(user["id"]))}
 
 
 @app.post("/api/shop/equip")
@@ -542,6 +577,54 @@ async def history(user: dict = Depends(current_user)):
             "opponents": [p["name"] for p in players if p["pid"] != pid],
         })
     return {"matches": out, "transactions": S.ledger.history(acc(user["id"]), 30)}
+
+
+@app.get("/api/replay/{match_id}")
+async def match_replay(match_id: str, reveal: bool = False, user: dict = Depends(current_user)):
+    """Реплей власного завершеного матчу.
+
+    `reveal=1` додає руки всіх гравців — це розкриття роздачі, тому пишеться
+    в аудит, як і адмінське. Без нього реплей показує рівно те, що гравець
+    бачив за столом.
+    """
+    m = S.db.one("SELECT * FROM matches WHERE id=?", (match_id,))
+    mine = S.db.one("SELECT 1 FROM match_players WHERE match_id=? AND user_id=?", (match_id, user["id"]))
+    # 404 і для чужого матчу: не підтверджуємо існування матчів інших гравців
+    if not m or not mine:
+        raise HTTPException(404, "Матч не знайдено")
+    if m["status"] == "playing":
+        raise HTTPException(403, "Реплей доступний лише після завершення матчу")
+
+    events = S.db.q("SELECT seq,ts,actor,type,data FROM match_events WHERE match_id=? ORDER BY seq", (match_id,))
+    for e in events:
+        e["data"] = json.loads(e["data"] or "{}")
+    # Роздача потрібна рушієві, щоб відтворити добори; показуємо її лише з reveal.
+    deal = S.rooms.cipher.decrypt(m["deal_enc"]) if m["deal_enc"] else None
+    try:
+        data = build_replay(events, deal, reveal=reveal)
+    except ReplayError as e:
+        raise HTTPException(409, str(e))
+    if reveal:
+        S.db.audit(user["id"], "replay_reveal", match_id, {})
+
+    hide_bot = m["mode"] != "stake"
+    players = [
+        {"pid": p["pid"], "name": p["name"],
+         "bot": bool(p.get("bot")) and not hide_bot,
+         "level": p.get("level") if (p.get("bot") and not hide_bot) else None,
+         "you": p.get("user_id") == user["id"]}
+        for p in json.loads(m["players"])
+    ]
+    return {
+        "match": {
+            "id": m["id"], "created_at": m["created_at"], "finished_at": m["finished_at"],
+            "mode": m["mode"], "stake": m["stake"], "status": m["status"],
+            "rules": json.loads(m["rules"]), "result": json.loads(m["result"] or "null"),
+            "players": players,
+        },
+        "frames": data["frames"], "chat": data["chat"],
+        "truncated_at": data["truncated_at"], "revealed": reveal,
+    }
 
 
 class InvoiceIn(BaseModel):
@@ -986,6 +1069,8 @@ async def my_progress(user: dict = Depends(current_user)):
     u = S.db.user(uid)
     return {
         "quests": S.progress.quests(uid),
+        "weekly": S.progress.weekly(uid),
+        "pass": S.progress.season_pass(uid),
         "achievements": S.progress.achievements(uid),
         "titles": S.progress.titles(uid), "title": u["title"],
         "stats": S.progress.stats(uid),
@@ -993,6 +1078,98 @@ async def my_progress(user: dict = Depends(current_user)):
         "rating": {"value": u["rating"] or 1000, "games": u["ranked_games"] or 0},
         "season": season_id(),
     }
+
+
+# ---------- навчальна гра ----------
+# Фіксований сід: усі новачки бачать одну й ту саму — перевірену — роздачу,
+# тож підказки завжди доречні, а не випадково суперечать тому, що на руках.
+TUTORIAL_SEED = 20261114
+
+
+def _tutorial_done(uid: int) -> bool:
+    return bool(S.db.one(
+        "SELECT 1 FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+        "WHERE mp.user_id=? AND m.kind='tutorial'", (uid,)))
+
+
+@app.post("/api/tutorial")
+async def tutorial_play(user: dict = Depends(current_user)):
+    """Навчальна партія проти легкого бота: не рахується в денний ліміт."""
+    uid = user["id"]
+    if S.rooms.current(uid):
+        raise HTTPException(400, "Ви вже за столом")
+    rules = Rules.from_dict({"variant": "podkidnoy", "deck_size": 36, "turn_seconds": 60})
+    room = await S.rooms.create_fixed(
+        [{"user_id": uid, "name": user["name"]}, {"bot": {"level": "easy"}}],
+        "free", 0, rules, meta={"tutorial": True, "seed": TUTORIAL_SEED}, name="Навчальна гра")
+    return {"room": room.id}
+
+
+# ---------- роздача дня ----------
+def _daily_rows(day: str) -> list[dict]:
+    """Завершені «роздачі дня» за добу: гравець, результат, тривалість."""
+    a, b = day_bounds(day)
+    rows = S.db.q(
+        "SELECT m.id, m.created_at, m.finished_at, m.result, mp.user_id, u.name "
+        "FROM matches m JOIN match_players mp ON mp.match_id=m.id JOIN users u ON u.id=mp.user_id "
+        "WHERE m.kind='daily' AND m.created_at>=? AND m.created_at<? AND u.banned=0", (a, b))
+    out = []
+    for r in rows:
+        res = json.loads(r["result"] or "{}")
+        pid = f"u{r['user_id']}"
+        if r["result"] is None:
+            continue                       # ще грає
+        outcome = "draw" if res.get("draw") else "loss" if res.get("loser") == pid else "win"
+        out.append({"user_id": r["user_id"], "name": r["name"], "outcome": outcome,
+                    "seconds": max(0, (r["finished_at"] or r["created_at"]) - r["created_at"])})
+    # перемога важливіша за швидкість; серед рівних — хто швидше
+    out.sort(key=lambda x: ({"win": 0, "draw": 1, "loss": 2}[x["outcome"]], x["seconds"]))
+    for i, r in enumerate(out):
+        r["place"] = i + 1
+    return out
+
+
+def _daily_played(uid: int, day: str) -> bool:
+    a, b = day_bounds(day)
+    return bool(S.db.one(
+        "SELECT 1 FROM matches m JOIN match_players mp ON mp.match_id=m.id "
+        "WHERE mp.user_id=? AND m.kind='daily' AND m.created_at>=? AND m.created_at<?", (uid, a, b)))
+
+
+@app.get("/api/daily")
+async def daily_status(user: dict = Depends(current_user)):
+    day = today()
+    rows = _daily_rows(day)
+    return {"day": day, "played": _daily_played(user["id"], day),
+            "top": rows[:20], "me": next((r for r in rows if r["user_id"] == user["id"]), None)}
+
+
+@app.post("/api/daily")
+async def daily_play(user: dict = Depends(current_user)):
+    """Одна спроба на добу: та сама роздача для всіх гравців."""
+    uid, day = user["id"], today()
+    if S.rooms.current(uid):
+        raise HTTPException(400, "Ви вже за столом")
+    if _daily_played(uid, day):
+        raise HTTPException(409, "Роздачу дня ви вже сьогодні грали")
+    rules = Rules.from_dict({"variant": "podkidnoy", "deck_size": 36, "turn_seconds": 30})
+    room = await S.rooms.create_fixed(
+        [{"user_id": uid, "name": user["name"]}, {"bot": {"level": "medium"}}],
+        "free", 0, rules, meta={"daily": day, "seed": daily_seed(day)}, name="Роздача дня")
+    return {"room": room.id}
+
+
+class ClaimIn(BaseModel):
+    tier: int
+
+
+@app.post("/api/season/claim")
+async def season_claim(body: ClaimIn, user: dict = Depends(current_user)):
+    try:
+        got = S.progress.claim_season_tier(user["id"], body.tier)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {**got, "pass": S.progress.season_pass(user["id"])}
 
 
 class TitleIn(BaseModel):
@@ -1038,6 +1215,8 @@ async def public_profile(uid: int, user: dict = Depends(current_user)):
         "stats": {k: st[k] for k in ("games", "wins", "losses", "draws", "tournament_wins", "best_win_streak")},
         "achievements": ach, "achievements_total": len(ACHIEVEMENTS),
         "friend": S.social.are_friends(user["id"], uid), "online": is_online(uid), "me": uid == user["id"],
+        # особистий рахунок має сенс лише з кимось іншим
+        "h2h": None if uid == user["id"] else S.progress.head_to_head(user["id"], uid),
     }
 
 

@@ -49,6 +49,20 @@ export default function PlayerCard({ seat, uid, matchId, onClose, toast }) {
               <div><b>{p.stats.games ? Math.round((100 * p.stats.wins) / p.stats.games) : 0}%</b><span>{t('виграшів')}</span></div>
               <div><b>{p.stats.tournament_wins}</b><span>{t('турнірів')}</span></div>
             </div>
+            {p.h2h && p.h2h.played > 0 && (
+              <>
+                <h4>{t('Особистий рахунок')}</h4>
+                <div className="h2h">
+                  <b className="plus">{p.h2h.wins}</b>
+                  <span>:</span>
+                  <b className="minus">{p.h2h.losses}</b>
+                  <small className="hint">
+                    {p.h2h.draws ? t('нічиїх: {0} · ', p.h2h.draws) : ''}
+                    {t('разом зіграно {0}', p.h2h.played)}
+                  </small>
+                </div>
+              </>
+            )}
             <h4>{t('Досягнення')} · {p.achievements.length}/{p.achievements_total}</h4>
             <div className="badges">
               {p.achievements.length === 0 && <small className="hint">{t('Поки немає')}</small>}

@@ -252,6 +252,13 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS season_pass (
+    user_id INTEGER NOT NULL,
+    sid TEXT NOT NULL,              -- сезон, напр. 2026-11
+    tier INTEGER NOT NULL,
+    claimed_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, sid, tier)
+);
 """
 
 

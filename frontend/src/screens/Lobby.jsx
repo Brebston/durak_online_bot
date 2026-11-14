@@ -26,6 +26,28 @@ export default function Lobby({ me, send, toast, view: initialView }) {
   const [rooms, setRooms] = useState(null)
   const [roomName, setRoomName] = useState('')
   const [listed, setListed] = useState(true)
+  const [daily, setDaily] = useState(null)
+  const [dailyBusy, setDailyBusy] = useState(false)
+  const [tutorBusy, setTutorBusy] = useState(false)
+
+  useEffect(() => {
+    if (view !== 'quick') return
+    api('/api/daily').then(setDaily).catch(() => {})
+  }, [view])
+
+  const playDaily = async () => {
+    setDailyBusy(true)
+    try {
+      await api('/api/daily', {})
+    } catch (e) { toast(e.message); setDailyBusy(false) }
+  }
+
+  const playTutorial = async () => {
+    setTutorBusy(true)
+    try {
+      await api('/api/tutorial', {})
+    } catch (e) { toast(e.message); setTutorBusy(false) }
+  }
 
   useEffect(() => {
     if (view !== 'rooms') return
@@ -53,6 +75,44 @@ export default function Lobby({ me, send, toast, view: initialView }) {
         <button className={view === 'rooms' ? 'on' : ''} onClick={() => setView('rooms')}>{t('🚪 Кімнати')}</button>
         {modes.tournaments !== false && <button className={view === 'tournaments' ? 'on' : ''} onClick={() => setView('tournaments')}>{t('🏆 Турніри')}</button>}
       </div>
+
+      {view === 'quick' && !me.tutorial_done && (
+        <section className="card-box tutor-box">
+          <h3>{t('🎓 Навчальна гра')}</h3>
+          <p className="hint">{t('Спокійна партія проти легкого бота з підказками на кожному кроці. Не витрачає денний ліміт.')}</p>
+          <button className="btn primary" disabled={tutorBusy} onClick={playTutorial}>
+            {tutorBusy ? t('Роздаємо…') : t('Почати навчання')}
+          </button>
+        </section>
+      )}
+
+      {view === 'quick' && daily && (
+        <section className="card-box daily-box">
+          <h3>{t('🎴 Роздача дня')}</h3>
+          <p className="hint">{t('Одна й та сама роздача для всіх гравців сьогодні. Одна спроба на добу.')}</p>
+          {daily.played ? (
+            <>
+              <p>{daily.me
+                ? t('Ваш результат: {0} · місце {1}', { win: t('перемога'), draw: t('нічия'), loss: t('поразка') }[daily.me.outcome], daily.me.place)
+                : t('Партію зараховано.')}</p>
+              {daily.top.length > 0 && (
+                <ul className="list">
+                  {daily.top.slice(0, 5).map((r) => (
+                    <li key={r.user_id}>
+                      <div><b>{r.place}. {r.name}</b></div>
+                      <small>{{ win: t('перемога'), draw: t('нічия'), loss: t('поразка') }[r.outcome]}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <button className="btn primary" disabled={dailyBusy || me.banned} onClick={playDaily}>
+              {dailyBusy ? t('Роздаємо…') : t('Грати роздачу дня')}
+            </button>
+          )}
+        </section>
+      )}
 
       {view === 'tournaments' && <Tournaments me={me} toast={toast} />}
       {view !== 'tournaments' && (<>

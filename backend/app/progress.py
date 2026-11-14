@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import random
 import time
 
@@ -21,6 +23,13 @@ QUEST_KINDS: dict[str, tuple[str, tuple[int, ...], int]] = {
     "catch": ("Спіймай мухляра в режимі «Шулер»", (1,), 70),
 }
 QUESTS_PER_DAY = 3
+
+# ---------------- тижневі завдання ----------------
+# Ті самі види, але з більшою ціллю й нагородою: привід повернутися через тиждень,
+# а не лише завтра. Живуть у тій самій таблиці quests, у «дні» виду 2026-W46.
+QUESTS_PER_WEEK = 3
+WEEK_TARGET_SCALE = 4
+WEEK_REWARD_SCALE = 5
 
 # ---------------- досягнення ----------------
 # id: (назва, опис, поле статистики, поріг)
@@ -45,11 +54,48 @@ STREAK_XP = 20            # × номер дня (до 7)
 STREAK_ITEM_DAY = 7       # на 7-й день — нагородна сорочка
 STREAK_ITEM = "back_streak"
 
+# ---------------- сезонний пропуск ----------------
+# Безкоштовна гілка: очки сезону (ті самі, що в таблиці лідерів) відкривають рівні,
+# нагорода — досвід, а на останньому ще й титул сезону. Нагороди треба забрати самому.
+# Платної гілки навмисно немає: це окреме продуктове рішення, а не технічне.
+SEASON_PASS: list[dict] = [
+    {"tier": 1, "points": 10, "xp": 100},
+    {"tier": 2, "points": 25, "xp": 150},
+    {"tier": 3, "points": 50, "xp": 250},
+    {"tier": 4, "points": 90, "xp": 350},
+    {"tier": 5, "points": 140, "xp": 500},
+    {"tier": 6, "points": 200, "xp": 700, "title": "🎟 Пропуск сезону {sid}"},
+]
+
 ELO_START = 1000
 
 
 def today(now: float | None = None) -> str:
     return dt.datetime.fromtimestamp(now or time.time(), dt.UTC).strftime("%Y-%m-%d")
+
+
+def day_bounds(d: str) -> tuple[int, int]:
+    start = dt.datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=dt.UTC)
+    return int(start.timestamp()), int((start + dt.timedelta(days=1)).timestamp())
+
+
+def daily_seed(d: str) -> int:
+    """Сід роздачі дня: однаковий для всіх гравців, але непередбачуваний наперед."""
+    return int(hashlib.sha256(f"durak-daily:{d}".encode()).hexdigest()[:12], 16)
+
+
+def week_id(now: float | None = None) -> str:
+    """ISO-тиждень, напр. 2026-W46. Формат навмисно не схожий на день (2026-11-14),
+    тому обидва набори завдань уживаються в одній таблиці без змін схеми."""
+    d = dt.datetime.fromtimestamp(now or time.time(), dt.UTC)
+    y, w, _ = d.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def week_bounds(wid: str) -> tuple[int, int]:
+    y, w = wid.split("-W")
+    start = dt.datetime.fromisocalendar(int(y), int(w), 1).replace(tzinfo=dt.UTC)
+    return int(start.timestamp()), int((start + dt.timedelta(days=7)).timestamp())
 
 
 def season_id(now: float | None = None) -> str:
@@ -78,23 +124,31 @@ class Progress:
         self.db.ex("INSERT OR IGNORE INTO user_stats(user_id) VALUES(?)", (uid,))
         return self.db.one("SELECT * FROM user_stats WHERE user_id=?", (uid,))
 
-    # ---------- щоденні завдання ----------
-    def quests(self, uid: int, now: float | None = None) -> list[dict]:
-        day = today(now)
-        rows = self.db.q("SELECT * FROM quests WHERE user_id=? AND day=? ORDER BY rowid", (uid, day))
+    # ---------- завдання (щоденні й тижневі) ----------
+    def _bucket(self, uid: int, bucket: str, count: int, tscale: int, rscale: int) -> list[dict]:
+        """Завдання одного періоду; створює їх при першому зверненні."""
+        rows = self.db.q("SELECT * FROM quests WHERE user_id=? AND day=? ORDER BY rowid", (uid, bucket))
         if not rows:
-            rng = random.Random(f"{uid}:{day}")
-            for kind in rng.sample(sorted(QUEST_KINDS), QUESTS_PER_DAY):
+            rng = random.Random(f"{uid}:{bucket}")
+            for kind in rng.sample(sorted(QUEST_KINDS), count):
                 _, targets, reward = QUEST_KINDS[kind]
                 target = rng.choice(targets)
+                reward += 10 * (target - targets[0])
                 self.db.ex("INSERT OR IGNORE INTO quests(user_id,day,qid,target,reward) VALUES(?,?,?,?,?)",
-                           (uid, day, kind, target, reward + 10 * (target - targets[0])))
-            rows = self.db.q("SELECT * FROM quests WHERE user_id=? AND day=? ORDER BY rowid", (uid, day))
+                           (uid, bucket, kind, target * tscale, reward * rscale))
+            rows = self.db.q("SELECT * FROM quests WHERE user_id=? AND day=? ORDER BY rowid", (uid, bucket))
         return [{**r, "text": QUEST_KINDS[r["qid"]][0], "done": bool(r["done_at"])} for r in rows]
+
+    def quests(self, uid: int, now: float | None = None) -> list[dict]:
+        return self._bucket(uid, today(now), QUESTS_PER_DAY, 1, 1)
+
+    def weekly(self, uid: int, now: float | None = None) -> list[dict]:
+        return self._bucket(uid, week_id(now), QUESTS_PER_WEEK, WEEK_TARGET_SCALE, WEEK_REWARD_SCALE)
 
     def _bump_quests(self, uid: int, deltas: dict[str, int]) -> list[dict]:
         done = []
-        for q in self.quests(uid):
+        # один матч рухає обидва набори: тижневе завдання — це той самий прогрес, лише довший
+        for q in self.quests(uid) + self.weekly(uid):
             add = deltas.get(q["qid"], 0)
             if not add or q["done"]:
                 continue
@@ -104,7 +158,8 @@ class Progress:
                        (prog, int(time.time()) if fin else None, uid, q["day"], q["qid"]))
             if fin:
                 self.db.ex("UPDATE users SET xp = xp + ? WHERE id=?", (q["reward"], uid))
-                done.append({"text": q["text"], "target": q["target"], "reward": q["reward"]})
+                done.append({"text": q["text"], "target": q["target"], "reward": q["reward"],
+                             "weekly": "-W" in q["day"]})
         return done
 
     # ---------- серія днів ----------
@@ -187,6 +242,67 @@ class Progress:
             "win_multi": int(win and size >= 3), "catch": counters.get("catches", 0) if cheating else 0,
         })
         return {"quests": quests, "achievements": self._check_achievements(uid), "points": points}
+
+    # ---------- сезонний пропуск ----------
+    def season_points(self, uid: int, sid: str | None = None) -> int:
+        sid = sid or season_id()
+        a, b = season_bounds(sid)
+        r = self.db.one("SELECT COALESCE(SUM(points),0) n FROM match_points "
+                        "WHERE user_id=? AND created_at>=? AND created_at<?", (uid, a, b))
+        return int(r["n"] if r else 0)
+
+    def season_pass(self, uid: int, sid: str | None = None) -> dict:
+        sid = sid or season_id()
+        pts = self.season_points(uid, sid)
+        claimed = {r["tier"] for r in self.db.q(
+            "SELECT tier FROM season_pass WHERE user_id=? AND sid=?", (uid, sid))}
+        tiers = [{**t, "unlocked": pts >= t["points"], "claimed": t["tier"] in claimed,
+                  "title": t.get("title", "").format(sid=sid) or None} for t in SEASON_PASS]
+        return {"season": sid, "points": pts, "tiers": tiers,
+                "claimable": sum(1 for t in tiers if t["unlocked"] and not t["claimed"])}
+
+    def claim_season_tier(self, uid: int, tier: int, sid: str | None = None) -> dict:
+        """Забрати нагороду рівня. Повторно — не можна (ключ таблиці не дасть)."""
+        sid = sid or season_id()
+        spec = next((t for t in SEASON_PASS if t["tier"] == tier), None)
+        if not spec:
+            raise ValueError("Невідомий рівень пропуску")
+        if self.season_points(uid, sid) < spec["points"]:
+            raise ValueError("Рівень ще не відкрито")
+        cur = self.db.conn.execute(
+            "INSERT OR IGNORE INTO season_pass(user_id,sid,tier,claimed_at) VALUES(?,?,?,?)",
+            (uid, sid, tier, int(time.time())))
+        if not cur.rowcount:
+            raise ValueError("Нагороду вже забрано")
+        self.db.ex("UPDATE users SET xp = xp + ? WHERE id=?", (spec["xp"], uid))
+        title = spec.get("title", "").format(sid=sid)
+        if title:
+            self.grant_title(uid, f"season_pass:{sid}", title)
+        return {"tier": tier, "xp": spec["xp"], "title": title or None,
+                "achievements": self._check_achievements(uid)}
+
+    def head_to_head(self, me: int, other: int) -> dict:
+        """Особистий рахунок двох гравців.
+
+        Зараховуються лише партії, де «дурнем» став хтось із цих двох (або нічия):
+        за столом на 3–4 програти міг і третій — це не очна зустріч.
+        """
+        rows = self.db.q(
+            "SELECT m.result FROM matches m "
+            "JOIN match_players a ON a.match_id=m.id AND a.user_id=? "
+            "JOIN match_players b ON b.match_id=m.id AND b.user_id=? "
+            "WHERE m.status='finished'", (me, other))
+        mine, theirs = f"u{me}", f"u{other}"
+        h = {"played": len(rows), "wins": 0, "losses": 0, "draws": 0}
+        for r in rows:
+            res = json.loads(r["result"] or "{}")
+            if res.get("draw"):
+                h["draws"] += 1
+            elif res.get("loser") == theirs:
+                h["wins"] += 1
+            elif res.get("loser") == mine:
+                h["losses"] += 1
+        return h
 
     def tournament_won(self, uid: int, name: str, tid: int) -> list[dict]:
         self.stats(uid)

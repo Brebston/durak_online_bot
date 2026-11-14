@@ -9,3 +9,5 @@ __pycache__/
 .venv/
 .ruff_cache/
 .pytest_cache/
+graphify-out/
+.claude/
